@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-python -m pytest -q
-python scripts/run_experiment.py --config configs/experiment.yaml
+python3 -m pytest -q
+python3 scripts/run_experiment.py --config configs/experiment.yaml

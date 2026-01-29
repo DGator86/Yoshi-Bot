@@ -21,7 +21,14 @@ from gnosis.domains import DomainAggregator, compute_features
 from gnosis.regimes import KPCOFGSClassifier
 from gnosis.particle import ParticleState
 from gnosis.predictors import QuantilePredictor, BaselinePredictor
-from gnosis.harness import WalkForwardHarness, compute_future_returns, evaluate_predictions
+from gnosis.harness import (
+    WalkForwardHarness,
+    compute_future_returns,
+    evaluate_predictions,
+    IsotonicCalibrator,
+    compute_ece,
+    compute_stability_metrics,
+)
 from gnosis.registry import FeatureRegistry
 
 
@@ -83,6 +90,68 @@ def load_config(config_path: str) -> dict:
     return config
 
 
+def get_confidence_floor(regimes_config: dict, s_label: str) -> float:
+    """Get confidence floor for a species label from config."""
+    constraints = regimes_config.get("constraints_by_species", {})
+    if s_label in constraints:
+        return constraints[s_label].get("confidence_floor", 0.65)
+    return constraints.get("default", {}).get("confidence_floor", 0.65)
+
+
+def apply_abstain_logic(
+    preds_df: pd.DataFrame,
+    features_df: pd.DataFrame,
+    regimes_config: dict,
+) -> pd.DataFrame:
+    """Apply abstain logic based on species constraints.
+
+    If S_label == S_UNCERTAIN OR S_pmax < confidence_floor:
+        - Set abstain=True
+        - Widen forecast intervals (sigma *= 3)
+        - Set x_hat to NaN
+    """
+    result = preds_df.copy()
+
+    # Get S_label and S_pmax from features for matching rows
+    s_info = features_df[["symbol", "bar_idx", "S_label", "S_pmax"]].copy()
+    result = result.merge(s_info, on=["symbol", "bar_idx"], how="left")
+
+    # Determine abstain condition
+    abstain_mask = np.zeros(len(result), dtype=bool)
+
+    for idx in range(len(result)):
+        s_label = result.iloc[idx].get("S_label", "S_UNCERTAIN")
+        s_pmax = result.iloc[idx].get("S_pmax", 0.0)
+
+        if pd.isna(s_label):
+            s_label = "S_UNCERTAIN"
+        if pd.isna(s_pmax):
+            s_pmax = 0.0
+
+        confidence_floor = get_confidence_floor(regimes_config, s_label)
+
+        if s_label == "S_UNCERTAIN" or s_pmax < confidence_floor:
+            abstain_mask[idx] = True
+
+    result["abstain"] = abstain_mask
+
+    # Widen intervals and set x_hat to NaN for abstain cases
+    abstain_indices = result[result["abstain"]].index
+    if len(abstain_indices) > 0:
+        # Widen sigma by factor of 3
+        result.loc[abstain_indices, "sigma_hat"] = result.loc[abstain_indices, "sigma_hat"] * 3
+
+        # Widen quantile intervals
+        sigma_widened = result.loc[abstain_indices, "sigma_hat"].values
+        result.loc[abstain_indices, "q05"] = -1.645 * sigma_widened
+        result.loc[abstain_indices, "q95"] = 1.645 * sigma_widened
+
+        # Set x_hat to NaN for abstain
+        result.loc[abstain_indices, "x_hat"] = np.nan
+
+    return result
+
+
 def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -> dict:
     """Run the full experiment pipeline."""
     started_at = datetime.now(timezone.utc)
@@ -93,6 +162,7 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
 
     symbols = config["symbols"]
     parquet_dir = config["dataset"]["parquet_dir"]
+    regimes_config = config.get("regimes", {})
 
     # 1. Load or create print data
     print("Loading/creating print data...")
@@ -114,9 +184,8 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
     print("Computing features...")
     features_df = compute_features(bars_df)
 
-    # 5. Classify regimes
-    print("Classifying regimes...")
-    regimes_config = config.get("regimes", {})
+    # 5. Classify regimes (now with probabilities)
+    print("Classifying regimes with probability distributions...")
     classifier = KPCOFGSClassifier(regimes_config)
     features_df = classifier.classify(features_df)
 
@@ -130,8 +199,8 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
     print("Computing targets...")
     features_df = compute_future_returns(features_df, horizon_bars=10)
 
-    # 8. Walk-forward validation
-    print("Running walk-forward validation...")
+    # 8. Walk-forward validation with calibration
+    print("Running walk-forward validation with calibration...")
     wf_config = config.get("walkforward", {})
     harness = WalkForwardHarness(wf_config)
 
@@ -141,6 +210,7 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
     all_predictions = []
     all_baseline_preds = []
     fold_results = []
+    calibration_data = []  # For tracking calibration across folds
 
     for fold in harness.generate_folds(features_df):
         # Get fold data
@@ -158,14 +228,87 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
         baseline_preds = baseline.predict(test_df)
         baseline_preds["fold"] = fold.fold_idx
 
-        # Evaluate
-        metrics = evaluate_predictions(preds, test_df, "future_return")
+        # Fit isotonic calibrator on training data for S_pmax
+        # Outcome: 1 if S_label prediction is "correct" (we use a proxy based on regime stability)
+        train_s_pmax = train_df["S_pmax"].values
+        # Proxy for correctness: label didn't change in next step (stability proxy)
+        train_labels = train_df["S_label"].values
+        train_labels_shifted = np.roll(train_labels, -1)
+        train_labels_shifted[-1] = train_labels[-1]  # Handle boundary
+        train_outcomes = (train_labels == train_labels_shifted).astype(float)
+
+        calibrator = IsotonicCalibrator(n_bins=10)
+        calibrator.fit(train_s_pmax, train_outcomes)
+
+        # Apply calibration to test S_pmax
+        test_s_pmax_raw = test_df["S_pmax"].values.copy()
+        test_s_pmax_calibrated = calibrator.calibrate(test_s_pmax_raw)
+        test_df = test_df.copy()
+        test_df["S_pmax_calibrated"] = test_s_pmax_calibrated
+
+        # Compute calibration diagnostics on test set
+        test_labels = test_df["S_label"].values
+        test_labels_shifted = np.roll(test_labels, -1)
+        test_labels_shifted[-1] = test_labels[-1]
+        test_outcomes = (test_labels == test_labels_shifted).astype(float)
+
+        ece_raw = compute_ece(test_s_pmax_raw, test_outcomes, n_bins=10)
+        ece_calibrated = compute_ece(test_s_pmax_calibrated, test_outcomes, n_bins=10)
+
+        calibration_data.append({
+            "fold": fold.fold_idx,
+            "ece_raw": ece_raw["ece"],
+            "ece_calibrated": ece_calibrated["ece"],
+            "n_samples": ece_raw["n_samples"],
+        })
+
+        # Apply abstain logic
+        preds = apply_abstain_logic(preds, test_df, regimes_config)
+
+        # Add KPCOFGS columns to predictions
+        kpcofgs_cols = ["K_label", "P_label", "C_label", "O_label", "F_label", "G_label", "S_label",
+                        "K_pmax", "P_pmax", "C_pmax", "O_pmax", "F_pmax", "G_pmax", "S_pmax",
+                        "K_entropy", "P_entropy", "C_entropy", "O_entropy", "F_entropy", "G_entropy", "S_entropy",
+                        "regime_entropy"]
+        for col in kpcofgs_cols:
+            if col in test_df.columns:
+                preds = preds.merge(
+                    test_df[["symbol", "bar_idx", col]],
+                    on=["symbol", "bar_idx"],
+                    how="left",
+                    suffixes=("", "_dup")
+                )
+                # Remove any duplicate columns
+                if f"{col}_dup" in preds.columns:
+                    preds = preds.drop(columns=[f"{col}_dup"])
+
+        # Add calibrated S_pmax
+        preds = preds.merge(
+            test_df[["symbol", "bar_idx", "S_pmax_calibrated"]],
+            on=["symbol", "bar_idx"],
+            how="left",
+            suffixes=("", "_dup")
+        )
+        if "S_pmax_calibrated_dup" in preds.columns:
+            preds = preds.drop(columns=["S_pmax_calibrated_dup"])
+
+        # Evaluate (exclude abstained predictions for metrics)
+        non_abstain_preds = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds
+        if len(non_abstain_preds) > 0:
+            metrics = evaluate_predictions(non_abstain_preds, test_df, "future_return")
+        else:
+            metrics = evaluate_predictions(preds, test_df, "future_return")
+
         baseline_metrics = evaluate_predictions(baseline_preds, test_df, "future_return")
+
+        # Compute abstention rate
+        abstention_rate = preds["abstain"].mean() if "abstain" in preds.columns else 0.0
 
         fold_results.append({
             "fold": fold.fold_idx,
             "n_train": len(train_df),
             "n_test": len(test_df),
+            "abstention_rate": float(abstention_rate),
             **{f"model_{k}": v for k, v in metrics.items()},
             **{f"baseline_{k}": v for k, v in baseline_metrics.items()},
         })
@@ -188,22 +331,74 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
         avg_sharpness = np.mean([f["model_sharpness"] for f in fold_results if not np.isnan(f["model_sharpness"])])
         avg_baseline_sharpness = np.mean([f["baseline_sharpness"] for f in fold_results if not np.isnan(f["baseline_sharpness"])])
         avg_mae = np.mean([f["model_mae"] for f in fold_results if not np.isnan(f["model_mae"])])
+        avg_abstention_rate = np.mean([f["abstention_rate"] for f in fold_results])
     else:
         avg_coverage = 0.9
         avg_sharpness = 0.01
         avg_baseline_sharpness = 0.02
         avg_mae = 0.01
+        avg_abstention_rate = 0.0
 
-    # 10. Create feature registry
+    # 10. Compute stability metrics
+    print("Computing stability metrics...")
+    stability_metrics = compute_stability_metrics(features_df)
+
+    # 11. Compute calibration summary
+    print("Computing calibration diagnostics...")
+    if calibration_data:
+        avg_ece_raw = np.mean([c["ece_raw"] for c in calibration_data])
+        avg_ece_calibrated = np.mean([c["ece_calibrated"] for c in calibration_data])
+        calibration_summary = {
+            "avg_ece_raw": float(avg_ece_raw),
+            "avg_ece_calibrated": float(avg_ece_calibrated),
+            "calibration_improvement": float(avg_ece_raw - avg_ece_calibrated),
+            "fold_calibration": calibration_data,
+        }
+    else:
+        calibration_summary = {
+            "avg_ece_raw": 0.0,
+            "avg_ece_calibrated": 0.0,
+            "calibration_improvement": 0.0,
+            "fold_calibration": [],
+        }
+
+    # 12. Create feature registry
     print("Creating feature registry...")
     registry = FeatureRegistry.create_default()
     registry.save(out_dir / "feature_registry.json")
 
-    # 11. Save artifacts
+    # 13. Save artifacts
     print("Saving artifacts...")
 
-    # predictions.parquet
+    # predictions.parquet - ensure all required columns
     if not predictions_df.empty:
+        # Ensure required columns exist
+        required_cols = [
+            "symbol", "bar_idx", "timestamp_end", "close",
+            "q05", "q50", "q95", "x_hat", "sigma_hat", "fold",
+            "K_label", "K_pmax", "K_entropy",
+            "P_label", "P_pmax", "P_entropy",
+            "C_label", "C_pmax", "C_entropy",
+            "O_label", "O_pmax", "O_entropy",
+            "F_label", "F_pmax", "F_entropy",
+            "G_label", "G_pmax", "G_entropy",
+            "S_label", "S_pmax", "S_entropy", "S_pmax_calibrated",
+            "regime_entropy", "abstain"
+        ]
+        for col in required_cols:
+            if col not in predictions_df.columns:
+                if col == "abstain":
+                    predictions_df[col] = False
+                elif col.endswith("_label"):
+                    predictions_df[col] = "UNKNOWN"
+                elif col.endswith("_calibrated"):
+                    predictions_df[col] = 0.5
+                else:
+                    predictions_df[col] = 0.0
+
+        # Select columns in order
+        available_cols = [c for c in required_cols if c in predictions_df.columns]
+        predictions_df = predictions_df[available_cols]
         predictions_df.to_parquet(out_dir / "predictions.parquet", index=False)
     else:
         # Create minimal predictions file
@@ -218,6 +413,30 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
             "x_hat": [0.0],
             "sigma_hat": [0.005],
             "fold": [0],
+            "K_label": ["K_BALANCED"],
+            "K_pmax": [0.5],
+            "K_entropy": [0.5],
+            "P_label": ["P_VOL_STABLE"],
+            "P_pmax": [0.5],
+            "P_entropy": [0.5],
+            "C_label": ["C_FLOW_NEUTRAL"],
+            "C_pmax": [0.5],
+            "C_entropy": [0.5],
+            "O_label": ["O_RANGE"],
+            "O_pmax": [0.5],
+            "O_entropy": [0.5],
+            "F_label": ["F_STALL"],
+            "F_pmax": [0.5],
+            "F_entropy": [0.5],
+            "G_label": ["G_BO_FAIL"],
+            "G_pmax": [0.5],
+            "G_entropy": [0.5],
+            "S_label": ["S_UNCERTAIN"],
+            "S_pmax": [0.5],
+            "S_entropy": [0.5],
+            "S_pmax_calibrated": [0.5],
+            "regime_entropy": [3.5],
+            "abstain": [True],
         }).to_parquet(out_dir / "predictions.parquet", index=False)
 
     # trades.parquet (subset of prints used)
@@ -233,6 +452,9 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
         "sharpness_improvement": (avg_baseline_sharpness - avg_sharpness) / (avg_baseline_sharpness + 1e-9),
         "mae": avg_mae,
         "n_folds": len(fold_results),
+        "abstention_rate": avg_abstention_rate,
+        "stability": stability_metrics,
+        "calibration": calibration_summary,
         "fold_results": fold_results,
     }
     # Compute report_hash and add it to report
@@ -279,12 +501,33 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
 - Symbols: {', '.join(symbols)}
 - Random Seed: {config.get('random_seed', 1337)}
 
+## Abstention
+- **Abstention Rate**: {avg_abstention_rate:.4f}
+- Predictions with S_label=S_UNCERTAIN or S_pmax < confidence_floor are marked as abstain
+
+## Stability Metrics
+| Level | Flip Rate | Avg Entropy |
+|-------|-----------|-------------|
+"""
+    for level in ["K", "P", "C", "O", "F", "G", "S"]:
+        flip_rate = stability_metrics.get(f"{level}_flip_rate", 0.0)
+        avg_entropy = stability_metrics.get(f"{level}_avg_entropy", 0.0)
+        report_md += f"| {level} | {flip_rate:.4f} | {avg_entropy:.4f} |\n"
+
+    report_md += f"\n- **Overall Flip Rate**: {stability_metrics.get('overall_flip_rate', 0.0):.4f}\n"
+
+    report_md += f"""
+## Calibration Summary
+- **ECE (Raw)**: {calibration_summary['avg_ece_raw']:.4f}
+- **ECE (Calibrated)**: {calibration_summary['avg_ece_calibrated']:.4f}
+- **Improvement**: {calibration_summary['calibration_improvement']:.4f}
+
 ## Fold Results
-| Fold | N_Train | N_Test | Coverage | Sharpness | MAE |
-|------|---------|--------|----------|-----------|-----|
+| Fold | N_Train | N_Test | Coverage | Sharpness | MAE | Abstain |
+|------|---------|--------|----------|-----------|-----|---------|
 """
     for fr in fold_results:
-        report_md += f"| {fr['fold']} | {fr['n_train']} | {fr['n_test']} | {fr['model_coverage_90']:.4f} | {fr['model_sharpness']:.6f} | {fr['model_mae']:.6f} |\n"
+        report_md += f"| {fr['fold']} | {fr['n_train']} | {fr['n_test']} | {fr['model_coverage_90']:.4f} | {fr['model_sharpness']:.6f} | {fr['model_mae']:.6f} | {fr['abstention_rate']:.4f} |\n"
 
     with open(out_dir / "report.md", "w") as f:
         f.write(report_md)
@@ -292,6 +535,7 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml") -
     print(f"\nExperiment complete. Artifacts saved to {out_dir}")
     print(f"Status: {report['status']}")
     print(f"Coverage: {avg_coverage:.4f}")
+    print(f"Abstention Rate: {avg_abstention_rate:.4f}")
 
     return report
 
