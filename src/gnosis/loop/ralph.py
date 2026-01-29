@@ -35,7 +35,7 @@ from gnosis.harness.scoring import (
     compute_stability_metrics,
 )
 from gnosis.predictors import QuantilePredictor
-from gnosis.baseline import BaselinePredictor
+from gnosis.predictors import BaselinePredictor
 from gnosis.regimes.constraints import apply_abstain_logic
 
 
