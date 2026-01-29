@@ -1,0 +1,18 @@
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# venv
+.venv/
+
+# local data/artifacts
+data/
+reports/
+
+# OS/editor
+.DS_Store
+*.swp
