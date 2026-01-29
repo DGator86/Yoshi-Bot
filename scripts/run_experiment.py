@@ -256,71 +256,71 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h
     calibration_data = []  # For tracking calibration across folds
 
 
-        for fold in harness.generate_folds(features_df):
-            # Get fold data
-            train_df = features_df.iloc[fold.train_start:fold.train_end].copy()
-            test_df = features_df.iloc[fold.test_start:fold.test_end].copy()
+    for fold in harness.generate_folds(features_df):
+        # Get fold data
+        train_df = features_df.iloc[fold.train_start:fold.train_end].copy()
+        test_df = features_df.iloc[fold.test_start:fold.test_end].copy()
 
-            if len(train_df) < 10 or len(test_df) < 5:
-                continue
+        if len(train_df) < 10 or len(test_df) < 5:
+            continue
 
-            # Apply fold-specific hyperparameters if Ralph Loop was run
-            fold_models_config = models_config.copy()
-            fold_regimes_config = regimes_config.copy()
+        # Apply fold-specific hyperparameters if Ralph Loop was run
+        fold_models_config = models_config.copy()
+        fold_regimes_config = regimes_config.copy()
 
-            # Create fold-specific predictor
-            fold_predictor = QuantilePredictor(fold_models_config)
+        # Create fold-specific predictor
+        fold_predictor = QuantilePredictor(fold_models_config)
 
-            # Fit and predict
-            fold_predictor.fit(train_df, "future_return")
-            preds = fold_predictor.predict(test_df)
-            preds["fold"] = fold.fold_idx
+        # Fit and predict
+        fold_predictor.fit(train_df, "future_return")
+        preds = fold_predictor.predict(test_df)
+        preds["fold"] = fold.fold_idx
 
-            baseline_preds = baseline.predict(test_df)
-            baseline_preds["fold"] = fold.fold_idx
+        baseline_preds = baseline.predict(test_df)
+        baseline_preds["fold"] = fold.fold_idx
 
-            # Fit isotonic calibrator on training data for S_pmax
-            train_s_pmax = train_df["S_pmax"].values
-            train_labels = train_df["S_label"].values
-            train_labels_shifted = np.roll(train_labels, -1)
-            train_labels_shifted[-1] = train_labels[-1]
-            train_outcomes = (train_labels == train_labels_shifted).astype(float)
+        # Fit isotonic calibrator on training data for S_pmax
+        train_s_pmax = train_df["S_pmax"].values
+        train_labels = train_df["S_label"].values
+        train_labels_shifted = np.roll(train_labels, -1)
+        train_labels_shifted[-1] = train_labels[-1]
+        train_outcomes = (train_labels == train_labels_shifted).astype(float)
 
-            calibrator = IsotonicCalibrator(n_bins=10)
-            calibrator.fit(train_s_pmax, train_outcomes)
+        calibrator = IsotonicCalibrator(n_bins=10)
+        calibrator.fit(train_s_pmax, train_outcomes)
 
-            # Apply calibration to test S_pmax
-            test_s_pmax_raw = test_df["S_pmax"].values.copy()
-            test_s_pmax_calibrated = calibrator.calibrate(test_s_pmax_raw)
-            test_df = test_df.copy()
-            test_df["S_pmax_calibrated"] = test_s_pmax_calibrated
+        # Apply calibration to test S_pmax
+        test_s_pmax_raw = test_df["S_pmax"].values.copy()
+        test_s_pmax_calibrated = calibrator.calibrate(test_s_pmax_raw)
+        test_df = test_df.copy()
+        test_df["S_pmax_calibrated"] = test_s_pmax_calibrated
 
-            # Apply abstain logic
-            preds = apply_abstain_logic(preds, test_df, fold_regimes_config)
+        # Apply abstain logic
+        preds = apply_abstain_logic(preds, test_df, fold_regimes_config)
 
-            # Evaluate (exclude abstained predictions for metrics)
-            non_abstain_preds = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds
-            if len(non_abstain_preds) > 0:
-                metrics = evaluate_predictions(non_abstain_preds, test_df, "future_return")
-            else:
-                metrics = evaluate_predictions(preds, test_df, "future_return")
+        # Evaluate (exclude abstained predictions for metrics)
+        non_abstain_preds = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds
+        if len(non_abstain_preds) > 0:
+            metrics = evaluate_predictions(non_abstain_preds, test_df, "future_return")
+        else:
+            metrics = evaluate_predictions(preds, test_df, "future_return")
 
-            baseline_metrics = evaluate_predictions(baseline_preds, test_df, "future_return")
+        baseline_metrics = evaluate_predictions(baseline_preds, test_df, "future_return")
 
-            # Compute abstention rate
-            abstention_rate = preds["abstain"].mean() if "abstain" in preds.columns else 0.0
+        # Compute abstention rate
+        abstention_rate = preds["abstain"].mean() if "abstain" in preds.columns else 0.0
 
-            fold_results.append({
-                "fold": fold.fold_idx,
-                "n_train": len(train_df),
-                "n_test": len(test_df),
-                "abstention_rate": float(abstention_rate),
-                **{f"model_{k}": v for k, v in metrics.items()},
-                **{f"baseline_{k}": v for k, v in baseline_metrics.items()},
-            })
+        fold_results.append({
+            "fold": fold.fold_idx,
+            "n_train": len(train_df),
+            "n_test": len(test_df),
+            "abstention_rate": float(abstention_rate),
+            **{f"model_{k}": v for k, v in metrics.items()},
+            **{f"baseline_{k}": v for k, v in baseline_metrics.items()},
+        })
 
-            all_predictions.append(preds)
-            all_baseline_preds.append(baseline_preds)
+        all_predictions.append(preds)
+        all_baseline_preds.append(baseline_preds)
     if fold_results:
         avg_coverage = np.mean([f["model_coverage_90"] for f in fold_results if not np.isnan(f["model_coverage_90"])])
         avg_sharpness = np.mean([f["model_sharpness"] for f in fold_results if not np.isnan(f["model_sharpness"])])
