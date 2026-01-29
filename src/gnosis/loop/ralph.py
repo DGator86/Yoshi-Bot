@@ -23,8 +23,8 @@ import pandas as pd
 
 from gnosis.harness.trade_walkforward import TradeWalkForwardHarness, TradeFold
 from gnosis.harness import WalkForwardHarness  # kept for compatibility elsewhere
-from gnosis.features import compute_features
-from gnosis.ingest.aggregate import DomainAggregator
+from gnosis.domains import compute_features
+from gnosis.domains import DomainAggregator
 from gnosis.regimes.kpcofgs import KPCOFGSClassifier
 from gnosis.particle.flow import compute_particle_state
 from gnosis.targets import compute_future_returns

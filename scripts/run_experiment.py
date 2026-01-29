@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 import pandas as pd
 import numpy as np
+from gnosis.harness.trade_walkforward import TradeWalkForwardHarness
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -22,7 +23,6 @@ from gnosis.regimes import KPCOFGSClassifier
 from gnosis.particle import ParticleState
 from gnosis.predictors import QuantilePredictor, BaselinePredictor
 from gnosis.harness import (
-from gnosis.harness.trade_walkforward import TradeWalkForwardHarness
     WalkForwardHarness,
     compute_future_returns,
     evaluate_predictions,
