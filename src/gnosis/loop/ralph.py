@@ -36,9 +36,30 @@ from gnosis.harness.scoring import (
 )
 from gnosis.predictors import QuantilePredictor
 from gnosis.predictors import BaselinePredictor
-from gnosis.regimes.constraints import apply_abstain_logic
+def __apply_abstain_logic(preds, confidence_floor_scale: float = 1.0):
+    """
+    Minimal abstain logic used by RalphLoop candidate evaluation.
 
+    Expected columns in preds:
+      - 'S_pmax' (float): raw regime confidence/probability max
+      - optionally 'confidence_floor' (float): base threshold
+      - optionally 'abstain' (bool/int): will be created if missing
 
+    Behavior:
+      - threshold = confidence_floor * confidence_floor_scale (default floor=0.0 if missing)
+      - abstain = (S_pmax < threshold)
+    """
+    import numpy as np
+
+    if "S_pmax" not in preds.columns:
+        # If the regime classifier doesn't provide S_pmax, don't abstain here.
+        preds["abstain"] = False
+        return preds
+
+    floor = preds["confidence_floor"] if "confidence_floor" in preds.columns else 0.0
+    thr = np.asarray(floor, dtype=float) * float(confidence_floor_scale)
+    preds["abstain"] = np.asarray(preds["S_pmax"], dtype=float) < thr
+    return preds
 @dataclass(frozen=True)
 class HparamCandidate:
     candidate_id: int
@@ -327,7 +348,7 @@ class RalphLoop:
         val_df = val_df.copy()
         val_df["S_pmax_calibrated"] = val_s_cal
 
-        preds = apply_abstain_logic(preds, val_df, regimes_cfg)
+        preds = _apply_abstain_logic(preds, val_df, regimes_cfg)
 
         # evaluate (exclude abstain)
         non_abstain = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds
