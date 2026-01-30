@@ -12,26 +12,6 @@ from pathlib import Path
 
 import yaml
 import pandas as pd
-from typing import List
-
-def _drop_future_return_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure we NEVER carry truth columns inside predictions until the single attach-truth step.
-    This prevents pandas from creating future_return_x / future_return_y during merges.
-    """
-    cols = [c for c in df.columns if c.startswith("future_return")]
-    if cols:
-        return df.drop(columns=cols, errors="ignore")
-    return df
-
-def _safe_merge_no_truth(left: pd.DataFrame, right: pd.DataFrame, on: List[str], how: str = "left") -> pd.DataFrame:
-    """
-    Merge right into left but *force* right to not contribute any future_return* columns.
-    """
-    right = right[[c for c in right.columns if not c.startswith("future_return")]]
-    return left.merge(right, on=on, how=how)
-
-
 import numpy as np
 from gnosis.harness.trade_walkforward import TradeWalkForwardHarness
 
@@ -376,7 +356,8 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h
         non_abstain_preds = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds
         if len(non_abstain_preds) > 0:
             metrics = evaluate_predictions(non_abstain_preds, test_df, "future_return")
-        else:            metrics = evaluate_predictions(preds, test_df, "future_return")
+        else:
+            metrics = evaluate_predictions(preds, test_df, "future_return")
 
         baseline_metrics = evaluate_predictions(baseline_preds, test_df, "future_return")
 
@@ -395,18 +376,13 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h
         # Attach y_true (future_return) for self-contained evaluation artifacts
 
         if isinstance(test_df, pd.DataFrame) and "future_return" in test_df.columns:
+
             key_cols = [c for c in ["symbol","bar_idx","timestamp_end"] if c in preds.columns and c in test_df.columns]
+
             if len(key_cols) >= 2:
-                preds = _drop_future_return_cols(preds)
-                preds = preds.merge(
-                    test_df[key_cols + ["future_return"]],
-                    on=key_cols,
-                    how="left",
-                    validate="m:1",
-                )
-                assert "future_return" in preds.columns
-                assert not any(c in preds.columns for c in ("future_return_x", "future_return_y")), \
-                    f"BUG: leaked future_return suffix cols: {[c for c in preds.columns if c.startswith('future_return')]}"
+
+                preds = preds.merge(test_df[key_cols + ["future_return"]], on=key_cols, how="left")
+
 
         all_predictions.append(preds)
         all_baseline_preds.append(baseline_preds)
@@ -504,7 +480,8 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h
                     predictions_df[col] = "UNKNOWN"
                 elif col.endswith("_calibrated"):
                     predictions_df[col] = 0.5
-                else:                    predictions_df[col] = 0.0
+                else:
+                    predictions_df[col] = 0.0
 
         # Select columns in order
         available_cols = [c for c in required_cols if c in predictions_df.columns]
@@ -536,18 +513,9 @@ def run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h
                 _y_src = _v[["symbol","bar_idx","future_return"]].copy()
                 break
         if _y_src is not None:
-            _pred_out = _drop_future_return_cols(_pred_out)
-_y_src = _y_src[["symbol", "bar_idx", "future_return"]]
-_pred_out = _pred_out.merge(
-    _y_src,
-    on=["symbol", "bar_idx"],
-    how="left",
-    validate="m:1",
-)
-assert "future_return" in _pred_out.columns
-assert not any(c in _pred_out.columns for c in ("future_return_x", "future_return_y"))
-
-        else:            # If we can't find y_true in locals, keep artifact as-is.
+            _pred_out = _pred_out.merge(_y_src, on=["symbol","bar_idx"], how="left")
+        else:
+            # If we can’t find y_true in locals, keep artifact as-is.
             pass
         # --- end inject ---
         _pred_out.to_parquet(out_dir / "predictions.parquet", index=False)
@@ -576,11 +544,7 @@ assert not any(c in _pred_out.columns for c in ("future_return_x", "future_retur
                     _bars = _bars.sort_values(['symbol','bar_idx']).reset_index(drop=True)
                     _bars = _compute_future_returns(_bars, horizon_bars=_cfgH)
                     _bars = _bars[['symbol','bar_idx','future_return']].copy()
-_preds = _drop_future_return_cols(_preds)
-_preds = _safe_merge_no_truth(_preds, _bars, on=["symbol", "bar_idx"], how="left")
-assert not any(c.startswith("future_return") for c in _preds.columns), \
-    f"BUG: future_return leaked into _preds via _bars merge: {[c for c in _preds.columns if c.startswith('future_return')]}"
-
+                    _preds = _preds.merge(_bars, on=['symbol','bar_idx'], how='left')
                     # Stable ordering for determinism
                     if 'symbol' in _preds.columns and 'bar_idx' in _preds.columns:
                         _preds = _preds.sort_values(['symbol','bar_idx']).reset_index(drop=True)

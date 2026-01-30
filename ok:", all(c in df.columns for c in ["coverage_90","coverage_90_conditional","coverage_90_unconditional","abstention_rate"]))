@@ -1,0 +1,264 @@
+[1mdiff --git a/configs/hparams.yaml b/configs/hparams.yaml[m
+[1mindex 48f337b..aef5ea9 100644[m
+[1m--- a/configs/hparams.yaml[m
+[1m+++ b/configs/hparams.yaml[m
+[36m@@ -11,18 +11,17 @@[m [mralph_loop:[m
+     mae: 1.0[m
+     abstention: 0.5[m
+ [m
+[31m-  # cartesian product grid (3*3*2*2 = 36 combos)[m
+[31m-  # Phase E: supports structural params (D0.n_trades) with caching[m
+[32m+[m[32m  # Phase F: Reduced grid to stay under 40 combos (2*2*8 = 32)[m
+[32m+[m[32m  # Focus on sigma_scale exploration which is critical for coverage target[m
+   grid:[m
+[31m-    # REAL structural knob: D0 aggregation size (with caching)[m
+[31m-    domains.domains.D0.n_trades: [100, 200, 300][m
+[32m+[m[32m    # Structural knob: D0 aggregation size (with caching)[m
+[32m+[m[32m    domains.domains.D0.n_trades: [100, 200][m
+ [m
+[31m-    # Abstain knobs (mapped to actual config paths via key-path mapping)[m
+[31m-    # regimes.confidence_floor -> regimes.constraints_by_species.default.confidence_floor[m
+[31m-    regimes.confidence_floor: [0.45, 0.55, 0.65][m
+[32m+[m[32m    # Abstain threshold (mapped to regimes.constraints_by_species.default.confidence_floor)[m
+[32m+[m[32m    regimes.confidence_floor: [0.50, 0.60][m
+ [m
+[31m-    # Interval scaling (applied post-prediction)[m
+[31m-    forecast.sigma_scale: [1.00, 1.15][m
+[32m+[m[32m    # Interval scaling - EXPANDED to reach 90% coverage target[m
+[32m+[m[32m    forecast.sigma_scale: [1.0, 1.15, 1.3, 1.5, 1.8, 2.2, 2.8, 3.5][m
+ [m
+     # NOTE: models.predictor.sigma_floor is reserved for future use[m
+     # (not currently implemented in QuantilePredictor)[m
+[1mdiff --git a/scripts/run_experiment.py b/scripts/run_experiment.py[m
+[1mindex 50d7a04..612459f 100644[m
+[1m--- a/scripts/run_experiment.py[m
+[1m+++ b/scripts/run_experiment.py[m
+[36m@@ -1,6 +1,7 @@[m
+ #!/usr/bin/env python3[m
+ """Main experiment runner for gnosis particle bot."""[m
+ import argparse[m
+[32m+[m[32mimport copy[m
+ import hashlib[m
+ import json[m
+ import platform[m
+[36m@@ -272,6 +273,25 @@[m [mdef run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h[m
+         fold_models_config = models_config.copy()[m
+         fold_regimes_config = regimes_config.copy()[m
+ [m
+[32m+[m[32m        # Phase F: Apply Ralph Loop selected parameters to this fold[m
+[32m+[m[32m        fold_sigma_scale = 1.0[m
+[32m+[m[32m        if fold.fold_idx in selected_hparams_per_fold:[m
+[32m+[m[32m            selected_params = selected_hparams_per_fold[fold.fold_idx][m
+[32m+[m
+[32m+[m[32m            # Apply sigma_scale from selected params[m
+[32m+[m[32m            if "forecast.sigma_scale" in selected_params:[m
+[32m+[m[32m                fold_sigma_scale = float(selected_params["forecast.sigma_scale"])[m
+[32m+[m
+[32m+[m[32m            # Apply confidence_floor from selected params[m
+[32m+[m[32m            if "regimes.confidence_floor" in selected_params:[m
+[32m+[m[32m                conf_floor = float(selected_params["regimes.confidence_floor"])[m
+[32m+[m[32m                fold_regimes_config = copy.deepcopy(regimes_config)[m
+[32m+[m[32m                if "constraints_by_species" not in fold_regimes_config:[m
+[32m+[m[32m                    fold_regimes_config["constraints_by_species"] = {}[m
+[32m+[m[32m                if "default" not in fold_regimes_config["constraints_by_species"]:[m
+[32m+[m[32m                    fold_regimes_config["constraints_by_species"]["default"] = {}[m
+[32m+[m[32m                fold_regimes_config["constraints_by_species"]["default"]["confidence_floor"] = conf_floor[m
+[32m+[m
+         # Create fold-specific predictor[m
+         fold_predictor = QuantilePredictor(fold_models_config)[m
+ [m
+[36m@@ -279,25 +299,28 @@[m [mdef run_experiment(config: dict, config_path: str = "configs/experiment.yaml", h[m
+         fold_predictor.fit(train_df, "future_return")[m
+         preds = fold_predictor.predict(test_df)[m
+         preds["fold"] = fold.fold_idx[m
+[31m-        # SIGMA_SCALE_RUN_EXPERIMENT[m
+[31m-        # Apply config-driven interval widening AFTER prediction, BEFORE abstain/scoring.[m
+[31m-        # Resolve sigma_scale from config (plus optional env override)[m
+[31m-        sigma_scale = 1.0[m
+[31m-        try:[m
+[31m-            sigma_scale = float([m
+[31m-                os.environ.get([m
+[31m-                    'GNOSIS_SIGMA_SCALE',[m
+[31m-                    ([m
+[31m-                        config.get('forecast', {}).get('sigma_scale', None)[m
+[31m-                        or config.get('forecast', {}).get('predictor', {}).get('sigma_scale', None)[m
+[31m-                        or config.get('models', {}).get('predictor', {}).get('sigma_scale', None)[m
+[31m-                        or config.get('models', {}).get('sigma_scale', None)[m
+[31m-                        or 1.0[m
+[32m+[m
+[32m+[m[32m        # Phase F: Apply sigma_scale from Ralph Loop OR config[m
+[32m+[m[32m        # Priority: Ralph Loop selected > env variable > config > default[m
+[32m+[m[32m        sigma_scale = fold_sigma_scale[m
+[32m+[m[32m        if fold_sigma_scale == 1.0:[m
+[32m+[m[32m            # Fall back to env/config if Ralph Loop didn't select this fold[m
+[32m+[m[32m            try:[m
+[32m+[m[32m                sigma_scale = float([m
+[32m+[m[32m                    os.environ.get([m
+[32m+[m[32m                        'GNOSIS_SIGMA_SCALE',[m
+[32m+[m[32m                        ([m
+[32m+[m[32m                            config.get('forecast', {}).get('sigma_scale', None)[m
+[32m+[m[32m                            or config.get('forecast', {}).get('predictor', {}).get('sigma_scale', None)[m
+[32m+[m[32m                            or config.get('models', {}).get('predictor', {}).get('sigma_scale', None)[m
+[32m+[m[32m                            or config.get('models', {}).get('sigma_scale', None)[m
+[32m+[m[32m                            or 1.0[m
+[32m+[m[32m                        )[m
+                     )[m
+                 )[m
+[31m-            )[m
+[31m-        except Exception:[m
+[31m-            sigma_scale = 1.0[m
+[32m+[m[32m            except Exception:[m
+[32m+[m[32m                sigma_scale = 1.0[m
+[32m+[m
+         if sigma_scale != 1.0:[m
+             center = preds['q50'] if 'q50' in preds.columns else preds['x_hat'][m
+             half = (preds['q95'] - preds['q05']) / 2.0[m
+[1mdiff --git a/src/gnosis/harness/ralph_loop.py b/src/gnosis/harness/ralph_loop.py[m
+[1mindex 5d0a165..b505c0d 100644[m
+[1m--- a/src/gnosis/harness/ralph_loop.py[m
+[1m+++ b/src/gnosis/harness/ralph_loop.py[m
+[36m@@ -238,6 +238,13 @@[m [mclass TrialResult:[m
+     composite_score: float[m
+     params_json: str[m
+     resolved_params_json: str = ""  # Phase E: resolved key mappings[m
+[32m+[m[32m    # Phase F: Explicit param columns for easy analysis[m
+[32m+[m[32m    confidence_floor: float = 0.65[m
+[32m+[m[32m    sigma_scale: float = 1.0[m
+[32m+[m[32m    n_trades: int = 200[m
+[32m+[m[32m    # Phase F: Conditional vs unconditional coverage[m
+[32m+[m[32m    coverage_90_conditional: float = 0.0  # Same as coverage_90 (non-abstained only)[m
+[32m+[m[32m    coverage_90_unconditional: float = 0.0  # Abstained counted as uncovered[m
+ [m
+ [m
+ def _set_nested_key(d: dict, dotted_key: str, value: Any) -> None:[m
+[36m@@ -610,6 +617,10 @@[m [mclass RalphLoop:[m
+         elif "forecast" in cfg and "sigma_scale" in cfg["forecast"]:[m
+             sigma_scale = float(cfg["forecast"]["sigma_scale"])[m
+ [m
+[32m+[m[32m        # PHASE F FIX: Use the MODIFIED regimes config from cfg, not the original[m
+[32m+[m[32m        # This ensures confidence_floor from the grid is actually applied[m
+[32m+[m[32m        modified_regimes_config = cfg.get("regimes", regimes_config)[m
+[32m+[m
+         # Get inner train/val data (use candidate_features_df for structural params)[m
+         # Adjust fold indices if candidate_features_df has different length[m
+         n_rows = len(candidate_features_df)[m
+[36m@@ -628,6 +639,10 @@[m [mclass RalphLoop:[m
+         resolved_params_json = json.dumps(resolved_params, sort_keys=True)[m
+ [m
+         if len(train_df) < 10 or len(val_df) < 5:[m
+[32m+[m[32m            # Phase F: Extract param values even for early returns[m
+[32m+[m[32m            early_confidence_floor = float(candidate.params.get("regimes.confidence_floor", 0.65))[m
+[32m+[m[32m            early_sigma_scale = sigma_scale[m
+[32m+[m[32m            early_n_trades = int(candidate.params.get("domains.domains.D0.n_trades", 200))[m
+             return TrialResult([m
+                 outer_fold=outer_fold_idx,[m
+                 candidate_id=candidate.candidate_id,[m
+[36m@@ -641,6 +656,11 @@[m [mclass RalphLoop:[m
+                 composite_score=999.0,[m
+                 params_json=candidate.to_json(),[m
+                 resolved_params_json=resolved_params_json,[m
+[32m+[m[32m                confidence_floor=early_confidence_floor,[m
+[32m+[m[32m                sigma_scale=early_sigma_scale,[m
+[32m+[m[32m                n_trades=early_n_trades,[m
+[32m+[m[32m                coverage_90_conditional=0.0,[m
+[32m+[m[32m                coverage_90_unconditional=0.0,[m
+             )[m
+ [m
+         # Fit predictor on inner train[m
+[36m@@ -661,8 +681,8 @@[m [mclass RalphLoop:[m
+             outcomes = (train_labels == shifted).astype(float)[m
+             calibrator.fit(train_s, outcomes)[m
+ [m
+[31m-        # Apply abstain logic[m
+[31m-        preds = self._apply_abstain_logic(preds, val_df, regimes_config)[m
+[32m+[m[32m        # Apply abstain logic using MODIFIED config (Phase F fix)[m
+[32m+[m[32m        preds = self._apply_abstain_logic(preds, val_df, modified_regimes_config)[m
+ [m
+         # Score on non-abstained rows[m
+         non_abstain = preds[~preds["abstain"]].copy() if "abstain" in preds.columns else preds[m
+[36m@@ -681,7 +701,15 @@[m [mclass RalphLoop:[m
+                 how="inner",[m
+             )[m
+ [m
+[32m+[m[32m        # Phase F: Extract explicit param values for trial record[m
+[32m+[m[32m        param_confidence_floor = float(candidate.params.get("regimes.confidence_floor", 0.65))[m
+[32m+[m[32m        param_sigma_scale = sigma_scale  # Already extracted above[m
+[32m+[m[32m        param_n_trades = int(candidate.params.get("domains.domains.D0.n_trades", 200))[m
+[32m+[m
+         # Compute metrics[m
+[32m+[m[32m        coverage_90_conditional = 0.0[m
+[32m+[m[32m        coverage_90_unconditional = 0.0[m
+[32m+[m
+         if len(eval_df) > 0 and "future_return" in eval_df.columns:[m
+             y_true = eval_df["future_return"].values[m
+             valid_mask = ~np.isnan(y_true)[m
+[36m@@ -692,7 +720,15 @@[m [mclass RalphLoop:[m
+                 q50 = eval_df["q50"].values[valid_mask][m
+                 q95 = eval_df["q95"].values[valid_mask][m
+ [m
+[32m+[m[32m                # Phase F: Interval validity guard (lo <= hi)[m
+[32m+[m[32m                invalid_intervals = np.sum(q05 > q95)[m
+[32m+[m[32m                if invalid_intervals > 0:[m
+[32m+[m[32m                    # Fix invalid intervals by swapping[m
+[32m+[m[32m                    swap_mask = q05 > q95[m
+[32m+[m[32m                    q05[swap_mask], q95[swap_mask] = q95[swap_mask], q05[swap_mask][m
+[32m+[m
+                 coverage_90 = float(coverage(y_true, q05, q95))[m
+[32m+[m[32m                coverage_90_conditional = coverage_90  # Same as coverage_90 for non-abstained[m
+                 sharpness_val = float(sharpness(q05, q95))[m
+                 mae = float(np.mean(np.abs(y_true - q50)))[m
+ [m
+[36m@@ -707,6 +743,27 @@[m [mclass RalphLoop:[m
+ [m
+         abstention_rate = float(preds["abstain"].mean()) if "abstain" in preds.columns else 0.0[m
+ [m
+[32m+[m[32m        # Phase F: Compute unconditional coverage (abstained counted as uncovered)[m
+[32m+[m[32m        # Merge ALL predictions (including abstained) with targets[m
+[32m+[m[32m        all_preds_with_targets = preds.merge([m
+[32m+[m[32m            val_df[["symbol", "bar_idx", "future_return"]],[m
+[32m+[m[32m            on=["symbol", "bar_idx"],[m
+[32m+[m[32m            how="inner",[m
+[32m+[m[32m        )[m
+[32m+[m[32m        if len(all_preds_with_targets) > 0 and "future_return" in all_preds_with_targets.columns:[m
+[32m+[m[32m            y_all = all_preds_with_targets["future_return"].values[m
+[32m+[m[32m            valid_all = ~np.isnan(y_all)[m
+[32m+[m[32m            y_all = y_all[valid_all][m
+[32m+[m
+[32m+[m[32m            if len(y_all) > 0:[m
+[32m+[m[32m                q05_all = all_preds_with_targets["q05"].values[valid_all][m
+[32m+[m[32m                q95_all = all_preds_with_targets["q95"].values[valid_all][m
+[32m+[m[32m                abstain_all = all_preds_with_targets["abstain"].values[valid_all] if "abstain" in all_preds_with_targets.columns else np.zeros(len(y_all), dtype=bool)[m
+[32m+[m
+[32m+[m[32m                # Unconditional: abstained rows count as NOT covered[m
+[32m+[m[32m                in_interval = (y_all >= q05_all) & (y_all <= q95_all) & (~abstain_all)[m
+[32m+[m[32m                coverage_90_unconditional = float(np.mean(in_interval))[m
+[32m+[m
+         composite = self._compute_composite_score([m
+             coverage_90=coverage_90,[m
+             sharpness_val=sharpness_val,[m
+[36m@@ -729,6 +786,11 @@[m [mclass RalphLoop:[m
+             composite_score=composite,[m
+             params_json=candidate.to_json(),[m
+             resolved_params_json=resolved_params_json,[m
+[32m+[m[32m            confidence_floor=param_confidence_floor,[m
+[32m+[m[32m            sigma_scale=param_sigma_scale,[m
+[32m+[m[32m            n_trades=param_n_trades,[m
+[32m+[m[32m            coverage_90_conditional=coverage_90_conditional,[m
+[32m+[m[32m            coverage_90_unconditional=coverage_90_unconditional,[m
+         )[m
+ [m
+     def _select_best_for_outer_fold([m
+[36m@@ -825,6 +887,13 @@[m [mclass RalphLoop:[m
+                     "composite_score": t.composite_score,[m
+                     "params_json": t.params_json,[m
+                     "resolved_params_json": t.resolved_params_json,  # Phase E[m
+[32m+[m[32m                    # Phase F: Explicit param columns[m
+[32m+[m[32m                    "confidence_floor": t.confidence_floor,[m
+[32m+[m[32m                    "sigma_scale": t.sigma_scale,[m
+[32m+[m[32m                    "n_trades": t.n_trades,[m
+[32m+[m[32m                    # Phase F: Conditional vs unconditional coverage[m
+[32m+[m[32m                    "coverage_90_conditional": t.coverage_90_conditional,[m
+[32m+[m[32m                    "coverage_90_unconditional": t.coverage_90_unconditional,[m
+                 }[m
+                 for t in all_trials[m
+             ])[m
