@@ -3,15 +3,25 @@ from __future__ import annotations
 
 from .loader import load_or_create_prints, create_data_manifest
 from .loader import generate_stub_prints as _generate_stub_prints
-from .coingecko import fetch_coingecko_prints, CoinGeckoClient
+
+# Optional CoinGecko imports - gracefully handle if dependencies missing
+try:
+    from .coingecko import fetch_coingecko_prints, CoinGeckoClient
+    _COINGECKO_AVAILABLE = True
+except ImportError:
+    _COINGECKO_AVAILABLE = False
+    fetch_coingecko_prints = None
+    CoinGeckoClient = None
 
 __all__ = [
     "load_or_create_prints",
     "create_data_manifest",
     "generate_stub_prints",
-    "fetch_coingecko_prints",
-    "CoinGeckoClient",
 ]
+
+# Only export CoinGecko classes if available
+if _COINGECKO_AVAILABLE:
+    __all__.extend(["fetch_coingecko_prints", "CoinGeckoClient"])
 
 def generate_stub_prints(
     symbols: list[str],

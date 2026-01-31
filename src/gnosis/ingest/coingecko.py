@@ -197,7 +197,7 @@ def fetch_coingecko_prints(
             # Rate limiting to respect API limits
             time.sleep(CoinGeckoClient.RATE_LIMIT_DELAY_SECONDS)
         except requests.RequestException as e:
-            print(f"Warning: Network error fetching data for {symbol}: {e}")
+            print(f"Warning: Request failed for {symbol} ({type(e).__name__}): {e}")
             continue
         except ValueError as e:
             print(f"Warning: Invalid data for {symbol}: {e}")
