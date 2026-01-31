@@ -6,7 +6,7 @@ Usage:
     python scripts/fetch_coingecko_data.py --symbols BTCUSDT ETHUSDT --stub
 
     # Use CoinGecko API:
-    export COINGECKO_API_KEY=CG-krJCp3qpAfGUnTb5qDXezUzz
+    export COINGECKO_API_KEY=your-api-key-here
     python scripts/fetch_coingecko_data.py --symbols BTCUSDT ETHUSDT --days 7
 """
 import argparse
@@ -76,7 +76,7 @@ def main():
             print("Error: COINGECKO_API_KEY environment variable or --api-key argument required for CoinGecko data source", file=sys.stderr)
             print("Either set the environment variable or use --stub for synthetic data", file=sys.stderr)
             sys.exit(1)
-        print(f"API key: {api_key[:10]}...")
+        print("API key: configured")
 
     try:
         # Load or create prints
