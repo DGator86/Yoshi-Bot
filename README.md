@@ -8,6 +8,32 @@ Given print (trade) data, it produces probabilistic forecasts:
 - quantiles q05/q50/q95
 and a KPCOFGS regime taxonomy output K..S to narrow context.
 
+## Data Sources
+
+The bot supports two data sources:
+
+### 1. Stub Data (Default)
+Synthetic data generated for testing and development:
+```bash
+python scripts/fetch_coingecko_data.py --symbols BTCUSDT ETHUSDT --stub
+```
+
+### 2. CoinGecko API (Real Market Data)
+Fetch real cryptocurrency market data from CoinGecko:
+
+```bash
+# Set API key in environment
+export COINGECKO_API_KEY=CG-krJCp3qpAfGUnTb5qDXezUzz
+
+# Or copy .env.example to .env and set your API key
+cp .env.example .env
+
+# Fetch data
+python scripts/fetch_coingecko_data.py --symbols BTCUSDT ETHUSDT --days 30
+```
+
+Supported symbols: BTCUSDT, ETHUSDT, SOLUSDT
+
 ## Required Outputs (per run)
 - data/manifests/data_manifest.json
 - reports/latest/report.json

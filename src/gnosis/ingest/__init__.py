@@ -3,8 +3,15 @@ from __future__ import annotations
 
 from .loader import load_or_create_prints, create_data_manifest
 from .loader import generate_stub_prints as _generate_stub_prints
+from .coingecko import fetch_coingecko_prints, CoinGeckoClient
 
-__all__ = ["load_or_create_prints", "create_data_manifest", "generate_stub_prints"]
+__all__ = [
+    "load_or_create_prints",
+    "create_data_manifest",
+    "generate_stub_prints",
+    "fetch_coingecko_prints",
+    "CoinGeckoClient",
+]
 
 def generate_stub_prints(
     symbols: list[str],

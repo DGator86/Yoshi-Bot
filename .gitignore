@@ -16,3 +16,6 @@ reports/
 # OS/editor
 .DS_Store
 *.swp
+
+# Environment variables
+.env
