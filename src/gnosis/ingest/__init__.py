@@ -18,6 +18,31 @@ except ImportError:
     fetch_live_prints = None
     fetch_live_ohlcv = None
 
+# Multi-source providers
+try:
+    from .providers import (
+        DataProvider,
+        ProviderConfig,
+        CoinGeckoProvider,
+        CoinMarketCapProvider,
+        YFinanceProvider,
+        BinancePublicProvider,
+        UnifiedDataFetcher,
+    )
+    from .providers.unified import fetch_crypto_data, fetch_crypto_prints
+    _HAS_PROVIDERS = True
+except ImportError:
+    _HAS_PROVIDERS = False
+    DataProvider = None
+    ProviderConfig = None
+    CoinGeckoProvider = None
+    CoinMarketCapProvider = None
+    YFinanceProvider = None
+    BinancePublicProvider = None
+    UnifiedDataFetcher = None
+    fetch_crypto_data = None
+    fetch_crypto_prints = None
+
 __all__ = [
     "load_or_create_prints",
     "create_data_manifest",
@@ -26,6 +51,16 @@ __all__ = [
     "CCXTLoader",
     "fetch_live_prints",
     "fetch_live_ohlcv",
+    # Multi-source providers
+    "DataProvider",
+    "ProviderConfig",
+    "CoinGeckoProvider",
+    "CoinMarketCapProvider",
+    "YFinanceProvider",
+    "BinancePublicProvider",
+    "UnifiedDataFetcher",
+    "fetch_crypto_data",
+    "fetch_crypto_prints",
 ]
 
 
