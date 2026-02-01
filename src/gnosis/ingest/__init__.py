@@ -4,7 +4,30 @@ from __future__ import annotations
 from .loader import load_or_create_prints, create_data_manifest
 from .loader import generate_stub_prints as _generate_stub_prints
 
-__all__ = ["load_or_create_prints", "create_data_manifest", "generate_stub_prints"]
+# CCXT-based live data fetching (optional - requires ccxt package)
+try:
+    from .ccxt_loader import (
+        CCXTLoader,
+        fetch_live_prints,
+        fetch_live_ohlcv,
+    )
+    _HAS_CCXT = True
+except ImportError:
+    _HAS_CCXT = False
+    CCXTLoader = None
+    fetch_live_prints = None
+    fetch_live_ohlcv = None
+
+__all__ = [
+    "load_or_create_prints",
+    "create_data_manifest",
+    "generate_stub_prints",
+    # CCXT exports (available if ccxt is installed)
+    "CCXTLoader",
+    "fetch_live_prints",
+    "fetch_live_ohlcv",
+]
+
 
 def generate_stub_prints(
     symbols: list[str],
