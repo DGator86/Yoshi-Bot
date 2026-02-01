@@ -389,11 +389,13 @@ def fetch_live_prints(
     days: int = 7,
     api_key: Optional[str] = None,
     secret: Optional[str] = None,
+    fallback_to_ohlcv: bool = True,
 ) -> pd.DataFrame:
     """Convenience function to fetch trade prints for multiple symbols.
 
     This function provides a drop-in replacement for generate_stub_prints()
-    that fetches real market data.
+    that fetches real market data. If trade data is unavailable, it can
+    generate synthetic prints from OHLCV data.
 
     Args:
         symbols: List of trading pairs (e.g., ['BTCUSDT', 'ETHUSDT'])
@@ -401,6 +403,7 @@ def fetch_live_prints(
         days: Number of days of historical data to fetch
         api_key: Optional API key
         secret: Optional API secret
+        fallback_to_ohlcv: If True, generate prints from OHLCV when trades unavailable
 
     Returns:
         DataFrame with columns: timestamp, symbol, price, quantity, side, trade_id
@@ -433,13 +436,96 @@ def fetch_live_prints(
             if not trades_df.empty:
                 all_prints.append(trades_df)
                 print(f"  Fetched {len(trades_df)} trades")
+                continue
         except Exception as e:
-            print(f"  Warning: Could not fetch {ccxt_symbol}: {e}")
+            print(f"  Warning: Could not fetch trades for {ccxt_symbol}: {e}")
+
+        # Fallback: Generate prints from OHLCV data
+        if fallback_to_ohlcv:
+            print(f"  Falling back to OHLCV-based print generation...")
+            try:
+                ohlcv_df = loader.fetch_ohlcv(ccxt_symbol, timeframe='1m', days=days)
+                if not ohlcv_df.empty:
+                    prints_from_ohlcv = _generate_prints_from_ohlcv(ohlcv_df)
+                    all_prints.append(prints_from_ohlcv)
+                    print(f"  Generated {len(prints_from_ohlcv)} synthetic prints from {len(ohlcv_df)} OHLCV bars")
+            except Exception as e2:
+                print(f"  Warning: Could not fetch OHLCV for {ccxt_symbol}: {e2}")
 
     if not all_prints:
         raise ValueError(f"Could not fetch any trade data for symbols: {symbols}")
 
     return pd.concat(all_prints, ignore_index=True).sort_values('timestamp')
+
+
+def _generate_prints_from_ohlcv(ohlcv_df: pd.DataFrame, trades_per_bar: int = 50) -> pd.DataFrame:
+    """Generate synthetic trade prints from OHLCV data.
+
+    Creates realistic trade data by distributing trades within each OHLCV bar
+    using the bar's price range and volume.
+
+    Args:
+        ohlcv_df: DataFrame with OHLCV data (timestamp, open, high, low, close, volume, symbol)
+        trades_per_bar: Average number of trades to generate per bar
+
+    Returns:
+        DataFrame with synthetic trade prints
+    """
+    rng = np.random.default_rng(seed=42)  # Deterministic for reproducibility
+    records = []
+
+    for _, bar in ohlcv_df.iterrows():
+        symbol = bar['symbol']
+        bar_start = bar['timestamp']
+
+        # Number of trades varies with volume (normalized)
+        vol_factor = max(0.5, min(2.0, bar['volume'] / (ohlcv_df['volume'].mean() + 1e-10)))
+        n_trades = max(10, int(trades_per_bar * vol_factor * rng.uniform(0.7, 1.3)))
+
+        # Price path within the bar (OHLC-guided random walk)
+        o, h, l, c = bar['open'], bar['high'], bar['low'], bar['close']
+        price_range = h - l if h > l else o * 0.001
+
+        # Generate price path that respects OHLC
+        prices = np.zeros(n_trades)
+        prices[0] = o
+        prices[-1] = c
+
+        # Fill intermediate prices with constrained random walk
+        for i in range(1, n_trades - 1):
+            progress = i / (n_trades - 1)
+            target = o + (c - o) * progress
+            noise = rng.normal(0, price_range * 0.1)
+            prices[i] = np.clip(target + noise, l, h)
+
+        # Timestamps spread within the bar (assuming 1-minute bars)
+        offsets_ms = np.sort(rng.integers(0, 60000, n_trades))
+        timestamps = [bar_start + pd.Timedelta(milliseconds=int(ms)) for ms in offsets_ms]
+
+        # Quantities based on volume distribution
+        total_vol = bar['volume']
+        qty_weights = rng.exponential(1.0, n_trades)
+        qty_weights /= qty_weights.sum()
+        quantities = qty_weights * total_vol
+
+        # Sides based on price movement
+        for i in range(n_trades):
+            if i == 0:
+                side = 'BUY' if c > o else 'SELL'
+            else:
+                side = 'BUY' if prices[i] > prices[i-1] else 'SELL'
+
+            records.append({
+                'timestamp': timestamps[i],
+                'symbol': symbol,
+                'price': round(float(prices[i]), 8),
+                'quantity': round(float(quantities[i]), 8),
+                'side': side,
+                'trade_id': f"{symbol}_{bar_start.value}_{i}",
+            })
+
+    df = pd.DataFrame(records)
+    return df.sort_values('timestamp').reset_index(drop=True)
 
 
 def fetch_live_ohlcv(

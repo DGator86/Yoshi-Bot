@@ -4,8 +4,8 @@ symbols:
 - SOLUSDT
 venue: binance_spot
 dataset:
-  mode: parquet  # Options: parquet, stub, live
-  parquet_dir: data/parquet
+  mode: live  # Options: parquet, stub, live
+  parquet_dir: data/live
   # Live data settings (used when mode: live)
   live:
     exchange: binance
