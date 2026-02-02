@@ -181,7 +181,10 @@ def run_experiment(
 
     # 4. Compute features
     print("Computing features...")
-    features_df = compute_features(bars_df)
+    models_config = config.get("models", {})
+    predictor_config = models_config.get("predictor", {})
+    use_extended = predictor_config.get("extended_features", False)
+    features_df = compute_features(bars_df, extended=use_extended)
 
     # 5. Classify regimes (now with probabilities)
     print("Classifying regimes with probability distributions...")
