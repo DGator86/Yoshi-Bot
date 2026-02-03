@@ -367,13 +367,15 @@ class PriceParticle:
         - Low volume nodes (LVN): Price levels with low activity (fast moves through)
         """
         # Volume-weighted average price (VWAP)
-        df["vwap"] = df.groupby("symbol").apply(
-            lambda x: (x["close"] * x["volume"]).rolling(
-                self.potential_lookback, min_periods=10
-            ).sum() / x["volume"].rolling(
-                self.potential_lookback, min_periods=10
-            ).sum()
-        ).reset_index(level=0, drop=True)
+        df["_price_vol"] = df["close"] * df["volume"]
+        df["_price_vol_sum"] = df.groupby("symbol")["_price_vol"].transform(
+            lambda x: x.rolling(self.potential_lookback, min_periods=10).sum()
+        )
+        df["_vol_sum"] = df.groupby("symbol")["volume"].transform(
+            lambda x: x.rolling(self.potential_lookback, min_periods=10).sum()
+        )
+        df["vwap"] = df["_price_vol_sum"] / (df["_vol_sum"] + 1e-9)
+        df.drop(columns=["_price_vol", "_price_vol_sum", "_vol_sum"], inplace=True)
 
         # Distance from VWAP (normalized)
         df["vwap_distance"] = (df["close"] - df["vwap"]) / df["close"]
