@@ -13,4 +13,7 @@ reports/
 # OS/editor
 .DS_Store
 *.swp
+
+# Environment variables
+.env
 _moltbot_probe.txt
