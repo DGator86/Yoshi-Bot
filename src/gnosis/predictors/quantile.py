@@ -52,31 +52,22 @@ class QuantilePredictor:
 
         # Point estimate is median
         result["x_hat"] = result["q50"]
-        
-        # Optional: widen/narrow intervals (deterministic, config-driven)
-        _pred_cfg = self.config.get("predictor", {}) if isinstance(self.config, dict) else {}
-        sigma_scale = float(_pred_cfg.get("sigma_scale", 1.0))
-        if sigma_scale <= 0:
-            sigma_scale = 1.0
 
-        # Uncertainty from IQR
+        # Uncertainty from IQR (before any scaling)
         result["sigma_hat"] = (result["q95"] - result["q05"]) / 3.29  # approx std
-        if sigma_scale != 1.0:
-            z = 1.645
-            result["sigma_hat"] = result["sigma_hat"] * sigma_scale
-            result["q05"] = result["q50"] - z * result["sigma_hat"]
-            result["q95"] = result["q50"] + z * result["sigma_hat"]
 
-
-        # SIGMA_SCALE_APPLIED
-        # Apply optional sigma_scale AFTER all q05/q95 assignments (so it cannot be overwritten).
+        # Apply sigma_scale to widen/narrow intervals (SINGLE application)
+        # Priority: models.predictor.sigma_scale > models.sigma_scale > 1.0
         sigma_scale = 1.0
         if isinstance(self.config, dict):
-            # support BOTH: models.sigma_scale and models.predictor.sigma_scale
             sigma_scale = float(self.config.get('sigma_scale', 1.0))
             _pcfg = self.config.get('predictor', {})
             if isinstance(_pcfg, dict) and 'sigma_scale' in _pcfg:
-                sigma_scale = float(_pcfg.get('sigma_scale', sigma_scale))
+                sigma_scale = float(_pcfg['sigma_scale'])
+
+        if sigma_scale <= 0:
+            sigma_scale = 1.0
+
         if sigma_scale != 1.0:
             center = result['q50']
             half = (result['q95'] - result['q05']) / 2.0

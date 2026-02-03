@@ -5,16 +5,33 @@ from typing import Dict, List, Tuple
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
-    """Numerically stable softmax."""
+    """Numerically stable softmax with NaN/inf guards."""
+    # Replace NaN and inf with zeros before computing
+    logits = np.nan_to_num(logits, nan=0.0, posinf=10.0, neginf=-10.0)
+    # Clip to prevent overflow
+    logits = np.clip(logits, -50.0, 50.0)
     exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
-    return exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+    sum_exp = np.sum(exp_logits, axis=-1, keepdims=True)
+    # Prevent division by zero
+    sum_exp = np.where(sum_exp == 0, 1.0, sum_exp)
+    return exp_logits / sum_exp
 
 
 def _entropy(probs: np.ndarray) -> np.ndarray:
     """Compute entropy from probability distribution. probs shape: (N, K)."""
-    # Clip to avoid log(0)
+    # Handle NaN values and clip to avoid log(0)
+    probs = np.nan_to_num(probs, nan=1e-10)
     p = np.clip(probs, 1e-10, 1.0)
-    return -np.sum(p * np.log(p), axis=-1)
+    entropy = -np.sum(p * np.log(p), axis=-1)
+    # Ensure non-negative (can be slightly negative due to floating point)
+    return np.maximum(entropy, 0.0)
+
+
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray, default: float = 0.0) -> np.ndarray:
+    """Safely divide arrays, replacing inf/nan with default."""
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = numerator / (denominator + 1e-10)
+    return np.nan_to_num(result, nan=default, posinf=default, neginf=default)
 
 
 class KPCOFGSClassifier:
@@ -58,7 +75,8 @@ class KPCOFGSClassifier:
         returns_abs = df["returns"].abs().fillna(0).values
         vol = df["realized_vol"].fillna(df["realized_vol"].median()).values
         # Ensure no NaN in vol (use small positive value if all NaN)
-        vol = np.where(np.isnan(vol), 0.01, vol)
+        vol = np.nan_to_num(vol, nan=0.01)
+        vol = np.where(vol <= 0, 0.01, vol)  # Ensure positive
 
         # Compute logits based on distance from decision boundaries
         # K_TRENDING: |returns| > vol * 1.5
@@ -68,11 +86,11 @@ class KPCOFGSClassifier:
         logits = np.zeros((n, 3))
 
         # Trending score: how much |returns| exceeds vol * 1.5
-        trending_score = (returns_abs - vol * 1.5) / (vol + 1e-10)
+        trending_score = _safe_divide(returns_abs - vol * 1.5, vol)
         logits[:, 0] = trending_score * self.temperature
 
         # Mean-reverting score: how much vol * 0.5 exceeds |returns|
-        mr_score = (vol * 0.5 - returns_abs) / (vol + 1e-10)
+        mr_score = _safe_divide(vol * 0.5 - returns_abs, vol)
         logits[:, 1] = mr_score * self.temperature
 
         # Balanced: base case (neutral logit)
@@ -88,18 +106,20 @@ class KPCOFGSClassifier:
         """Classify P-level (Pressure/Volatility regime) with probabilities."""
         n = len(df)
         vol = df["realized_vol"].fillna(df["realized_vol"].median()).values
-        vol = np.where(np.isnan(vol), 0.01, vol)
+        vol = np.nan_to_num(vol, nan=0.01)
+        vol = np.where(vol <= 0, 0.01, vol)
         vol_prev = np.roll(vol, 1)
         vol_prev[0] = vol[0]  # Handle first element
+        vol_prev = np.where(vol_prev <= 0, 0.01, vol_prev)
 
         logits = np.zeros((n, 3))
 
         # Vol expanding: vol > vol_prev * 1.2
-        expanding_score = (vol - vol_prev * 1.2) / (vol_prev + 1e-10)
+        expanding_score = _safe_divide(vol - vol_prev * 1.2, vol_prev)
         logits[:, 0] = expanding_score * self.temperature
 
         # Vol contracting: vol < vol_prev * 0.8
-        contracting_score = (vol_prev * 0.8 - vol) / (vol_prev + 1e-10)
+        contracting_score = _safe_divide(vol_prev * 0.8 - vol, vol_prev)
         logits[:, 1] = contracting_score * self.temperature
 
         # Stable: base case
@@ -168,7 +188,8 @@ class KPCOFGSClassifier:
         n = len(df)
         returns = df["returns"].fillna(0).values
         vol = df["realized_vol"].fillna(df["realized_vol"].median()).values
-        vol = np.where(np.isnan(vol), 0.01, vol)
+        vol = np.nan_to_num(vol, nan=0.01)
+        vol = np.where(vol <= 0, 0.01, vol)
 
         # Compute momentum and momentum change
         mom = pd.Series(returns).rolling(5, min_periods=1).mean().fillna(0).values
@@ -179,13 +200,13 @@ class KPCOFGSClassifier:
         logits = np.zeros((n, 4))
 
         # Accel: mom_change > vol * 0.5
-        logits[:, 0] = (mom_change - vol * 0.5) / (vol + 1e-10) * self.temperature
+        logits[:, 0] = _safe_divide(mom_change - vol * 0.5, vol) * self.temperature
 
         # Decel: mom_change < -vol * 0.5
-        logits[:, 1] = (-mom_change - vol * 0.5) / (vol + 1e-10) * self.temperature
+        logits[:, 1] = _safe_divide(-mom_change - vol * 0.5, vol) * self.temperature
 
         # Stall: |mom| < vol * 0.2
-        stall_score = (vol * 0.2 - np.abs(mom)) / (vol + 1e-10)
+        stall_score = _safe_divide(vol * 0.2 - np.abs(mom), vol)
         logits[:, 2] = stall_score * self.temperature
 
         # Reversal: base case

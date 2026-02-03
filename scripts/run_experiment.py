@@ -12,31 +12,15 @@ from pathlib import Path
 
 import yaml
 import pandas as pd
+import numpy as np
 from typing import List
 
-
-def _drop_future_return_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure we NEVER carry truth columns inside predictions until the single attach-truth step.
-    This prevents pandas from creating future_return_x / future_return_y during merges.
-    """
-    cols = [c for c in df.columns if c.startswith("future_return")]
-    if cols:
-        return df.drop(columns=cols, errors="ignore")
-    return df
-
-
-def _safe_merge_no_truth(
-    left: pd.DataFrame, right: pd.DataFrame, on: List[str], how: str = "left"
-) -> pd.DataFrame:
-    """
-    Merge right into left but *force* right to not contribute any future_return* columns.
-    """
-    right = right[[c for c in right.columns if not c.startswith("future_return")]]
-    return left.merge(right, on=on, how=how)
-
-
-import numpy as np
+from gnosis.utils import (
+    drop_future_return_cols,
+    safe_merge_no_truth,
+    vectorized_abstain_mask,
+    sanitize_for_json,
+)
 from gnosis.harness.trade_walkforward import TradeWalkForwardHarness
 
 # Add src to path
@@ -141,7 +125,7 @@ def apply_abstain_logic(
     features_df: pd.DataFrame,
     regimes_config: dict,
 ) -> pd.DataFrame:
-    """Apply abstain logic based on species constraints.
+    """Apply abstain logic based on species constraints (vectorized).
 
     If S_label == S_UNCERTAIN OR S_pmax < confidence_floor:
         - Set abstain=True
@@ -154,40 +138,30 @@ def apply_abstain_logic(
     s_info = features_df[["symbol", "bar_idx", "S_label", "S_pmax"]].copy()
     result = result.merge(s_info, on=["symbol", "bar_idx"], how="left")
 
-    # Determine abstain condition
-    abstain_mask = np.zeros(len(result), dtype=bool)
+    # Get default confidence floor from config
+    constraints = regimes_config.get("constraints_by_species", {})
+    default_floor = constraints.get("default", {}).get("confidence_floor", 0.65)
 
-    for idx in range(len(result)):
-        s_label = result.iloc[idx].get("S_label", "S_UNCERTAIN")
-        s_pmax = result.iloc[idx].get("S_pmax", 0.0)
-
-        if pd.isna(s_label):
-            s_label = "S_UNCERTAIN"
-        if pd.isna(s_pmax):
-            s_pmax = 0.0
-
-        confidence_floor = get_confidence_floor(regimes_config, s_label)
-
-        if s_label == "S_UNCERTAIN" or s_pmax < confidence_floor:
-            abstain_mask[idx] = True
-
+    # Vectorized abstain mask computation
+    abstain_mask = vectorized_abstain_mask(
+        result["S_label"],
+        result["S_pmax"],
+        confidence_floor=default_floor,
+    )
     result["abstain"] = abstain_mask
 
-    # Widen intervals and set x_hat to NaN for abstain cases
-    abstain_indices = result[result["abstain"]].index
-    if len(abstain_indices) > 0:
+    # Widen intervals and set x_hat to NaN for abstain cases (vectorized)
+    if abstain_mask.any():
         # Widen sigma by factor of 3
-        result.loc[abstain_indices, "sigma_hat"] = (
-            result.loc[abstain_indices, "sigma_hat"] * 3
-        )
+        result.loc[abstain_mask, "sigma_hat"] = result.loc[abstain_mask, "sigma_hat"] * 3
 
         # Widen quantile intervals
-        sigma_widened = result.loc[abstain_indices, "sigma_hat"].values
-        result.loc[abstain_indices, "q05"] = -1.645 * sigma_widened
-        result.loc[abstain_indices, "q95"] = 1.645 * sigma_widened
+        sigma_widened = result.loc[abstain_mask, "sigma_hat"]
+        result.loc[abstain_mask, "q05"] = -1.645 * sigma_widened
+        result.loc[abstain_mask, "q95"] = 1.645 * sigma_widened
 
         # Set x_hat to NaN for abstain
-        result.loc[abstain_indices, "x_hat"] = np.nan
+        result.loc[abstain_mask, "x_hat"] = np.nan
 
     return result
 
@@ -427,7 +401,7 @@ def run_experiment(
                 if c in preds.columns and c in test_df.columns
             ]
             if len(key_cols) >= 2:
-                preds = _drop_future_return_cols(preds)
+                preds = drop_future_return_cols(preds)
                 preds = preds.merge(
                     test_df[key_cols + ["future_return"]],
                     on=key_cols,
@@ -623,7 +597,7 @@ def run_experiment(
                 _y_src = _v[["symbol", "bar_idx", "future_return"]].copy()
                 break
         if _y_src is not None:
-            _pred_out = _drop_future_return_cols(_pred_out)
+            _pred_out = drop_future_return_cols(_pred_out)
             _y_src = _y_src[["symbol", "bar_idx", "future_return"]]
             _pred_out = _pred_out.merge(
                 _y_src,
@@ -671,8 +645,8 @@ def run_experiment(
                     )
                     _bars = _compute_future_returns(_bars, horizon_bars=_cfgH)
                     _bars = _bars[["symbol", "bar_idx", "future_return"]].copy()
-                    _preds = _drop_future_return_cols(_preds)
-                    _preds = _safe_merge_no_truth(
+                    _preds = drop_future_return_cols(_preds)
+                    _preds = safe_merge_no_truth(
                         _preds, _bars, on=["symbol", "bar_idx"], how="left"
                     )
                     assert not any(

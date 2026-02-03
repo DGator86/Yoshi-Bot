@@ -5,17 +5,15 @@ __pycache__/
 *.pyd
 *.egg-info/
 .pytest_cache/
-
 # venv
 .venv/
-
 # local data/artifacts
 data/
 reports/
-
 # OS/editor
 .DS_Store
 *.swp
 
 # Environment variables
 .env
+_moltbot_probe.txt
