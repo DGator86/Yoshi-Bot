@@ -110,7 +110,7 @@ class PositionManager:
             max_from_cash = available_cash / cost_factor
             target_notional = min(target_notional, max_from_cash)
 
-        return target_notional / adjusted_price
+        return target_notional / price
 
     def _compute_vol_adjusted_notional(
         self,
@@ -149,10 +149,3 @@ class PositionManager:
             target_notional *= min(vol_ratio, 2.0)  # Cap at 2x
 
         return target_notional
-            # Available notional after reserving for costs
-            available_notional = available_cash / cost_factor
-            target_notional = min(target_notional, available_notional)
-
-        # Convert notional to quantity at current price
-        # (don't apply cost_factor again - it's already in the notional cap)
-        return target_notional / price

@@ -71,8 +71,6 @@ __all__ = [
     "fetch_crypto_prints",
 ]
 
-]
-
 # Only export CoinGecko classes if available
 if _COINGECKO_AVAILABLE:
     __all__.extend(["fetch_coingecko_prints", "CoinGeckoClient"])

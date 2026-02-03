@@ -80,6 +80,8 @@ def load_or_create_prints(
     seed: int = 1337,
     mode: str = "parquet",
     live_config: dict | None = None,
+    use_coingecko: bool = False,
+    coingecko_api_key: str | None = None,
 ) -> pd.DataFrame:
     """Load prints from parquet, fetch live data, or create stub data.
 
@@ -93,24 +95,11 @@ def load_or_create_prints(
             - days: Days of historical data (default: 30)
             - api_key: Optional API key
             - secret: Optional API secret
+        use_coingecko: If True, fetch real data from CoinGecko API
+        coingecko_api_key: CoinGecko API key (optional, can use env var)
 
     Returns:
         DataFrame with print (trade) data
-    use_coingecko: bool = False,
-    coingecko_api_key: str | None = None,
-) -> pd.DataFrame:
-    """
-    Load prints from parquet or create data.
-    
-    Args:
-        parquet_dir: Directory to store/load parquet files
-        symbols: List of trading symbols
-        seed: Random seed for stub data generation
-        use_coingecko: If True, fetch real data from CoinGecko API
-        coingecko_api_key: CoinGecko API key (optional, can use env var)
-        
-    Returns:
-        DataFrame with print data
     """
     parquet_dir = Path(parquet_dir)
     parquet_dir.mkdir(parents=True, exist_ok=True)
@@ -163,7 +152,6 @@ def load_or_create_prints(
             return df
 
     # Mode: stub or fallback - generate synthetic data
-    df = generate_stub_prints(symbols, seed=seed, n_days=30, trades_per_day=5000)
     if use_coingecko:
         # Fetch real data from CoinGecko
         if not COINGECKO_AVAILABLE:
