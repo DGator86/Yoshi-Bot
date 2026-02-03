@@ -42,6 +42,14 @@ except ImportError:
     UnifiedDataFetcher = None
     fetch_crypto_data = None
     fetch_crypto_prints = None
+# Optional CoinGecko imports - gracefully handle if dependencies missing
+try:
+    from .coingecko import fetch_coingecko_prints, CoinGeckoClient
+    _COINGECKO_AVAILABLE = True
+except ImportError:
+    _COINGECKO_AVAILABLE = False
+    fetch_coingecko_prints = None
+    CoinGeckoClient = None
 
 __all__ = [
     "load_or_create_prints",
@@ -63,6 +71,11 @@ __all__ = [
     "fetch_crypto_prints",
 ]
 
+]
+
+# Only export CoinGecko classes if available
+if _COINGECKO_AVAILABLE:
+    __all__.extend(["fetch_coingecko_prints", "CoinGeckoClient"])
 
 def generate_stub_prints(
     symbols: list[str],

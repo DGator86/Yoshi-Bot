@@ -165,6 +165,29 @@ class BacktestRunner:
                     )
                     portfolio.apply_fill(fill)
                     pending_order = None
+                # Verify we're filling at bar_idx > decision_bar_idx (no same-bar fill)
+                if current_bar_idx <= pending_order.decision_bar_idx:
+                    # Same-bar or earlier fill would be lookahead - skip this order
+                    pending_order = None
+                elif current_bar_idx > pending_order.decision_bar_idx + 1:
+                    # Gap in data - order is stale, skip it (log for debugging)
+                    # In production this could be logged: f"Skipping stale order due to bar gap"
+                    pending_order = None
+
+            if pending_order is not None:
+
+                fill = self.executor.execute(
+                    timestamp=current_time,
+                    symbol=symbol,
+                    bar_idx=current_bar_idx,
+                    side=pending_order.side,
+                    quantity=pending_order.quantity,
+                    mid_price=current_price,
+                    volatility=pending_order.volatility,
+                    decision_bar_idx=pending_order.decision_bar_idx,
+                )
+                portfolio.apply_fill(fill)
+                pending_order = None
 
             # STEP 2: Mark portfolio to market at current bar
             portfolio.mark_to_market(
