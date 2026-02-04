@@ -203,8 +203,8 @@ class KalshiPredictor:
 
         # Get historical data for prediction
         history = self.monitor.get_history(symbol, bars=200)
-        if len(history) < 60:
-            logger.warning(f"Insufficient history for {symbol}: {len(history)} bars")
+        if len(history) < 30:  # Reduced from 60 - CoinGecko returns ~48 bars
+            logger.warning(f"Insufficient history for {symbol}: {len(history)} bars (need 30)")
             return None
 
         # Calculate time until hour end

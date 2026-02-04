@@ -123,6 +123,9 @@ class PriceMonitor:
             if not success:
                 logger.warning(f"Could not load history for {symbol} from any source")
 
+        # Also fetch current prices
+        await self.update_all()
+
         self._initialized = True
         logger.info("PriceMonitor initialized")
 
