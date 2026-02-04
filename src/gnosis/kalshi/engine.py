@@ -340,14 +340,23 @@ class HourlyPredictionEngine:
         if len(returns) < 10:
             return None
 
+        # Detect bar interval from timestamps (default to 30 min for CoinGecko)
+        bars_per_year = 365 * 24 * 60  # Default: 1-minute bars
+        if "timestamp" in df.columns and len(df) >= 2:
+            time_diff = (df["timestamp"].iloc[-1] - df["timestamp"].iloc[-2]).total_seconds()
+            if time_diff > 0:
+                bars_per_day = 86400 / time_diff  # seconds per day / seconds per bar
+                bars_per_year = bars_per_day * 365
+                logger.debug(f"Detected bar interval: {time_diff/60:.0f} min, {bars_per_year:.0f} bars/year")
+
         # Recent volatility (annualized)
-        vol_short = returns.tail(30).std() * np.sqrt(365 * 24 * 60)
-        vol_long = returns.tail(120).std() * np.sqrt(365 * 24 * 60) if len(returns) >= 120 else vol_short
+        vol_short = returns.tail(30).std() * np.sqrt(bars_per_year)
+        vol_long = returns.tail(120).std() * np.sqrt(bars_per_year) if len(returns) >= 120 else vol_short
 
         volatility = 0.7 * vol_short + 0.3 * vol_long
 
         # Drift estimate from momentum
-        momentum = returns.tail(30).mean() * (365 * 24 * 60)  # Annualized
+        momentum = returns.tail(30).mean() * bars_per_year  # Annualized
 
         # Adjust drift based on regime
         if regime == "ranging":
