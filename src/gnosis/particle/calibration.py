@@ -442,6 +442,7 @@ class PhysicsCalibrator:
         df: pd.DataFrame,
         param_grid: Dict[str, List[Any]],
         predict_fn: Callable[[pd.DataFrame, Dict], pd.DataFrame],
+        method: str = "grid",
     ) -> CalibrationResult:
         """Run full calibration pipeline.
 
@@ -449,6 +450,7 @@ class PhysicsCalibrator:
             df: Historical data DataFrame (sorted by time)
             param_grid: Dict mapping param names to candidate values
             predict_fn: Function that takes (df, params) and returns predictions DataFrame
+            method: Optimization method ("grid" or "bregman")
 
         Returns:
             CalibrationResult with optimal parameters
@@ -461,8 +463,11 @@ class PhysicsCalibrator:
         folds = self.create_time_series_folds(df)
         print(f"Created {len(folds)} time-series folds")
 
-        # Run grid search
-        result = self.grid_search(param_grid, folds, predict_fn)
+        # Run optimization
+        if method == "bregman":
+            result = self.bregman_optimize(param_grid, folds, predict_fn)
+        else:
+            result = self.grid_search(param_grid, folds, predict_fn)
 
         # Store results
         self._best_params = result.optimal_params
@@ -481,6 +486,97 @@ class PhysicsCalibrator:
         print(f"Total Loss: {result.total_loss:.4f}")
 
         return result
+
+    def bregman_optimize(
+        self,
+        param_grid: Dict[str, List[Any]],
+        folds: List[Tuple[pd.DataFrame, pd.DataFrame]],
+        predict_fn: Callable[[pd.DataFrame, Dict], pd.DataFrame],
+    ) -> CalibrationResult:
+        """Optimize using ProjectFW Bregman optimizer.
+
+        More efficient than grid search for continuous parameters,
+        with approximation guarantees.
+
+        Args:
+            param_grid: Dict mapping param names to candidate values
+            folds: Cross-validation folds
+            predict_fn: Prediction function
+
+        Returns:
+            CalibrationResult with optimal parameters
+        """
+        try:
+            from gnosis.harness.bregman_optimizer import HyperparameterOptimizer, BregmanConfig
+        except ImportError:
+            print("Bregman optimizer not available, falling back to grid search")
+            return self.grid_search(param_grid, folds, predict_fn)
+
+        param_names = list(param_grid.keys())
+
+        # Extract bounds from grid (min and max of candidates)
+        param_bounds = {}
+        for name, values in param_grid.items():
+            numeric_values = [v for v in values if isinstance(v, (int, float))]
+            if numeric_values:
+                param_bounds[name] = (min(numeric_values), max(numeric_values))
+            else:
+                # Non-numeric: fall back to grid search
+                print(f"Parameter {name} is non-numeric, using grid search")
+                return self.grid_search(param_grid, folds, predict_fn)
+
+        # Initial values (midpoints or first grid value)
+        initial_values = {}
+        for name, values in param_grid.items():
+            numeric_values = [v for v in values if isinstance(v, (int, float))]
+            if len(numeric_values) >= 2:
+                initial_values[name] = (min(numeric_values) + max(numeric_values)) / 2
+            else:
+                initial_values[name] = numeric_values[0] if numeric_values else values[0]
+
+        # Create objective function
+        def objective(params_dict: Dict[str, float]) -> float:
+            result = self.evaluate_params(params_dict, folds, predict_fn)
+            return result.total_loss
+
+        # Configure optimizer
+        bregman_config = BregmanConfig(
+            alpha=0.5,
+            initial_contraction=0.1,
+            convergence_threshold=self.config.convergence_threshold,
+            max_iterations=self.config.max_iterations,
+            verbose=True,
+        )
+
+        optimizer = HyperparameterOptimizer(bregman_config)
+
+        print(f"Bregman optimization over {len(param_names)} parameters...")
+
+        # Run optimization with validation
+        optimal_params, opt_result = optimizer.optimize_hyperparameters(
+            param_names=param_names,
+            param_bounds=param_bounds,
+            objective_fn=objective,
+            initial_values=initial_values,
+        )
+
+        # Evaluate final parameters
+        final_result = self.evaluate_params(optimal_params, folds, predict_fn)
+
+        print(f"Bregman optimization completed in {opt_result.iterations} iterations")
+        print(f"Stopping reason: {opt_result.stopping_reason.value}")
+
+        return CalibrationResult(
+            optimal_params=optimal_params,
+            calibration_error=final_result.calibration_error,
+            coverage_90=final_result.coverage_90,
+            coverage_50=final_result.coverage_50,
+            directional_accuracy=final_result.directional_accuracy,
+            sharpness=final_result.sharpness,
+            total_loss=final_result.total_loss,
+            fold_results=final_result.fold_results,
+            iterations=opt_result.iterations,
+        )
 
     def get_best_params(self) -> Dict[str, Any]:
         """Get best calibrated parameters."""
