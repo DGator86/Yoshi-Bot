@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -57,29 +58,33 @@ class PriceMonitor:
             "coingecko": "bitcoin",
             "kraken": "XXBTZUSD",
             "coinbase": "BTC-USD",
+            "coinapi": "BITSTAMP_SPOT_BTC_USD",
         },
         "ETH": {
             "binance": "ETHUSDT",
             "coingecko": "ethereum",
             "kraken": "XETHZUSD",
             "coinbase": "ETH-USD",
+            "coinapi": "BITSTAMP_SPOT_ETH_USD",
         },
         "SOL": {
             "binance": "SOLUSDT",
             "coingecko": "solana",
             "kraken": "SOLUSD",
             "coinbase": "SOL-USD",
+            "coinapi": "COINBASE_SPOT_SOL_USD",
         },
     }
 
-    # Data sources in priority order
-    SOURCES = ["binance", "coingecko", "kraken", "coinbase"]
+    # Data sources in priority order (coinapi first if API key provided)
+    SOURCES = ["coinapi", "binance", "coingecko", "kraken", "coinbase"]
 
     def __init__(
         self,
         symbols: Optional[List[str]] = None,
         history_size: int = 500,
         preferred_source: Optional[str] = None,
+        coinapi_key: Optional[str] = None,
     ):
         """Initialize PriceMonitor.
 
@@ -87,10 +92,12 @@ class PriceMonitor:
             symbols: List of symbols to monitor (default: BTC, ETH, SOL)
             history_size: Number of bars to keep in history
             preferred_source: Preferred data source (default: auto)
+            coinapi_key: CoinAPI API key for high-quality 1-min data
         """
         self.symbols = symbols or ["BTC", "ETH", "SOL"]
         self.history_size = history_size
         self.preferred_source = preferred_source
+        self.coinapi_key = coinapi_key or os.environ.get("COINAPI_KEY")
 
         # State
         self._latest: Dict[str, PriceSnapshot] = {}
@@ -137,7 +144,11 @@ class PriceMonitor:
             bars: Number of bars to fetch
             source: Data source to use
         """
-        if source == "binance":
+        if source == "coinapi":
+            if not self.coinapi_key:
+                raise Exception("CoinAPI key not configured")
+            await self._fetch_history_coinapi(symbol, bars)
+        elif source == "binance":
             await self._fetch_history_binance(symbol, bars)
         elif source == "coingecko":
             await self._fetch_history_coingecko(symbol, bars)
@@ -145,6 +156,43 @@ class PriceMonitor:
             await self._fetch_history_kraken(symbol, bars)
         elif source == "coinbase":
             await self._fetch_history_coinbase(symbol, bars)
+
+    async def _fetch_history_coinapi(self, symbol: str, bars: int = 200):
+        """Fetch from CoinAPI (high-quality 1-minute data)."""
+        import requests
+
+        coinapi_symbol = self.SYMBOL_MAP.get(symbol, {}).get("coinapi", f"BITSTAMP_SPOT_{symbol}_USD")
+        url = f"https://rest.coinapi.io/v1/ohlcv/{coinapi_symbol}/history"
+
+        # Calculate time range for the requested bars (1 min each)
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(minutes=bars + 10)  # Extra buffer
+
+        params = {
+            "period_id": "1MIN",
+            "time_start": start_time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "time_end": end_time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "limit": bars,
+        }
+        headers = {"X-CoinAPI-Key": self.coinapi_key}
+
+        response = requests.get(url, params=params, headers=headers, timeout=15)
+        if response.status_code != 200:
+            raise Exception(f"CoinAPI error: {response.status_code} - {response.text[:100]}")
+
+        data = response.json()
+        for candle in data:
+            bar = OHLCVBar(
+                timestamp=datetime.fromisoformat(candle["time_period_start"].replace("Z", "+00:00")).replace(tzinfo=None),
+                open=float(candle["price_open"]),
+                high=float(candle["price_high"]),
+                low=float(candle["price_low"]),
+                close=float(candle["price_close"]),
+                volume=float(candle.get("volume_traded", 0)),
+            )
+            self._history[symbol].append(bar)
+
+        logger.info(f"CoinAPI: Loaded {len(data)} 1-min bars for {symbol}")
 
     async def _fetch_history_binance(self, symbol: str, bars: int = 200):
         """Fetch from Binance."""
@@ -293,7 +341,24 @@ class PriceMonitor:
         """Fetch price from a specific source."""
         import requests
 
-        if source == "binance":
+        if source == "coinapi":
+            if not self.coinapi_key:
+                raise Exception("CoinAPI key not configured")
+            coinapi_symbol = self.SYMBOL_MAP.get(symbol, {}).get("coinapi", f"BITSTAMP_SPOT_{symbol}_USD")
+            url = f"https://rest.coinapi.io/v1/exchangerate/{symbol}/USD"
+            headers = {"X-CoinAPI-Key": self.coinapi_key}
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                raise Exception(f"Status {response.status_code}")
+            data = response.json()
+            return PriceSnapshot(
+                symbol=symbol,
+                price=float(data["rate"]),
+                timestamp=datetime.now(),
+                source="coinapi",
+            )
+
+        elif source == "binance":
             binance_symbol = self.SYMBOL_MAP.get(symbol, {}).get("binance", f"{symbol}USDT")
             url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={binance_symbol}"
             response = requests.get(url, timeout=10)
