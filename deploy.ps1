@@ -22,8 +22,11 @@ Write-Host "📡 Syncing Yoshi-Bot to VPS ($VPS_IP)..." -ForegroundColor Cyan
 
 # Use a temporary staging folder to avoid copying .venv
 $staging = "deploy_staging"
+if (Test-Path $staging) { Remove-Item -Path $staging -Recurse -Force }
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
-Copy-Item -Path "src", "scripts", "configs", "data", "*.sh", "*.py", "*.ps1", ".env", "pyproject.toml" -Destination $staging -Recurse -Force
+
+# Robocopy is more robust for large trees and allows easy excludes
+robocopy . $staging /E /XD .venv .git .mypy_cache __pycache__ $staging /R:1 /W:1 | Out-Null
 
 # Sync from staging
 scp -r "${staging}/*" "root@${VPS_IP}:/root/${DEST_DIR}"
@@ -38,8 +41,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "⚙️ Starting services on VPS..." -ForegroundColor Cyan
 
-# Build the command as a single line string
-$remoteCmd = "cd /root/${DEST_DIR}; chmod +x vps_setup.sh; ./vps_setup.sh; mkdir -p logs; . venv/bin/activate; nohup python3 scripts/kalshi_scanner.py --symbol BTCUSDT --loop --interval 300 --threshold 0.10 > logs/scanner.log 2>&1 & nohup python3 scripts/monitor_vps.py > logs/monitor.log 2>&1 &"
+# Build the command as a single line string including pkill for clean restart
+$remoteCmd = "cd /root/${DEST_DIR}; pkill -f scripts/kalshi_scanner.py || true; pkill -f scripts/monitor_vps.py || true; chmod +x vps_setup.sh; ./vps_setup.sh; mkdir -p logs; . venv/bin/activate; nohup python3 scripts/kalshi_scanner.py --symbol BTCUSDT --loop --interval 300 --threshold 0.10 > logs/scanner.log 2>&1 & nohup python3 scripts/monitor_vps.py > logs/monitor.log 2>&1 &"
 
 ssh "root@${VPS_IP}" $remoteCmd
 

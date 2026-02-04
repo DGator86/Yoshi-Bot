@@ -20,6 +20,8 @@ from dotenv import load_dotenv  # noqa: E402
 from src.gnosis.quantum import PriceTimeManifold  # noqa: E402
 import src.gnosis.utils.notifications as notify  # noqa: E402
 from src.gnosis.utils.kalshi_client import KalshiClient  # noqa: E402
+from src.gnosis.ingest.ccxt_loader import fetch_live_ohlcv  # noqa: E402
+from src.gnosis.ingest.coingecko import fetch_coingecko_prints  # noqa: E402
 from scripts.evaluate_manifold import prints_to_ohlcv  # noqa: E402
 
 # Load environment variables
@@ -57,20 +59,29 @@ def format_kalshi_report(opportunities):
     return "\n".join(lines)
 
 
-def run_scan(symbol, data_path, edge_threshold=0.10):
+def run_scan(symbol, data_path=None, edge_threshold=0.10, live_ohlcv=None):
     """Perform a single scan for opportunities using live Kalshi data."""
 
-    try:
-        df = pd.read_parquet(data_path)
-    except (FileNotFoundError, IOError) as e:
-        print(f"Error loading data: {e}")
+    if live_ohlcv is not None:
+        ohlcv_1m = live_ohlcv
+    elif data_path:
+        try:
+            df = pd.read_parquet(data_path)
+            symbol_df = df[df['symbol'] == symbol].copy()
+            if len(symbol_df) < 100:
+                print(f"Insufficient data for {symbol} in parquet.")
+                return []
+            ohlcv_1m = prints_to_ohlcv(symbol_df, bar_minutes=1)
+        except (FileNotFoundError, IOError) as e:
+            print(f"Error loading data: {e}")
+            return []
+    else:
+        print("No data source provided to run_scan.")
         return []
 
-    symbol_df = df[df['symbol'] == symbol].copy()
-    if len(symbol_df) < 100:
+    if ohlcv_1m.empty:
         return []
 
-    ohlcv_1m = prints_to_ohlcv(symbol_df, bar_minutes=1)
     current_p = ohlcv_1m['close'].iloc[-1]
 
     # 1. Check Exchange Status
@@ -157,10 +168,19 @@ def run_scan(symbol, data_path, edge_threshold=0.10):
         medians = []
 
         for tf in timeframes:
-            tf_df = ohlcv_1m.resample(f'{tf}min', on='timestamp').agg({
+            # Dynamically build aggregation dict based on available columns
+            agg_dict = {
                 'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-                'volume': 'sum', 'buy_volume': 'sum', 'sell_volume': 'sum'
-            }).dropna().reset_index()
+                'volume': 'sum'
+            }
+            if 'buy_volume' in ohlcv_1m.columns:
+                agg_dict['buy_volume'] = 'sum'
+            if 'sell_volume' in ohlcv_1m.columns:
+                agg_dict['sell_volume'] = 'sum'
+
+            tf_df = ohlcv_1m.resample(f'{tf}min', on='timestamp').agg(
+                agg_dict
+            ).dropna().reset_index()
 
             manifold = PriceTimeManifold()
             manifold.fit_from_1m_bars(tf_df)
@@ -198,6 +218,10 @@ def main():
                         help="Interval between scans in seconds")
     parser.add_argument("--threshold", type=float, default=0.10,
                         help="Edge threshold for alerts (e.g. 0.10 = 10%)")
+    parser.add_argument("--live", action="store_true", default=True,
+                        help="Fetch live data from APIs (default: True)")
+    parser.add_argument("--exchange", type=str, default="kraken",
+                        help="CCXT exchange ID (default: kraken)")
     args = parser.parse_args()
 
     data_path = "data/large_history/prints.parquet"
@@ -210,7 +234,46 @@ def main():
 
     while True:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scanning...")
-        opps = run_scan(args.symbol, data_path, args.threshold)
+
+        live_data = None
+        if args.live:
+            # Multi-source ingestion attempt
+            sources = [args.exchange, 'coinbase', 'kraken']
+            for src in sources:
+                try:
+                    print(f"Attempting live ingestion from {src}...")
+                    live_data = fetch_live_ohlcv(
+                        [args.symbol],
+                        exchange=src,
+                        timeframe='1m',
+                        days=2
+                    )
+                    if not live_data.empty:
+                        print(f"✅ Successfully ingested data from {src}.")
+                        break
+                except Exception as e:
+                    print(f"⚠️ {src} ingestion failed: {e}")
+
+            # Fallback to CoinGecko if CCXT fails
+            if live_data is None or live_data.empty:
+                print("🔄 Falling back to CoinGecko...")
+                try:
+                    cg_data = fetch_coingecko_prints([args.symbol], days=2)
+                    if not cg_data.empty:
+                        live_data = prints_to_ohlcv(cg_data, bar_minutes=1)
+                        print("✅ Successfully ingested data from CoinGecko.")
+                except Exception as e:
+                    print(f"❌ CoinGecko fallback failed: {e}")
+
+        if live_data is None:
+            print("⚠️ No live data available. Using local cache.")
+
+        opps = run_scan(
+            args.symbol,
+            data_path if not args.live or live_data is None else None,
+            args.threshold,
+            live_ohlcv=live_data
+        )
         if opps:
             print(f"Found {len(opps)} opportunities!")
             report = format_kalshi_report(opps)

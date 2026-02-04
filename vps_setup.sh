@@ -15,7 +15,7 @@ source venv/bin/activate
 
 # 4. Install requirements
 # Since we don't have a requirements.txt, we install known dependencies
-pip install numpy pandas scipy requests python-dotenv aiohttp cryptography pyarrow
+pip install numpy pandas scipy requests python-dotenv aiohttp cryptography pyarrow ccxt
 
 # 5. Setup Logging Directory
 mkdir -p logs

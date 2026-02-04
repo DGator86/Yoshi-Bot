@@ -19,8 +19,12 @@ from dotenv import load_dotenv
 # Add project root to path BEFORE importing local modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.gnosis.utils.notifications import send_telegram_alert_sync  # noqa: E402
-from src.gnosis.utils.digitalocean_client import DigitalOceanClient  # noqa: E402
+from src.gnosis.utils.notifications import (
+    send_telegram_alert_sync
+)  # noqa: E402
+from src.gnosis.utils.digitalocean_client import (
+    DigitalOceanClient
+)  # noqa: E402
 
 load_dotenv()
 
@@ -54,10 +58,11 @@ def monitor():
 
         # Attempt Restart
         try:
-            # We run it in the background using nohup
+            # We run it in the background using nohup with live data flags
             subprocess.Popen(
                 "nohup python3 scripts/kalshi_scanner.py --symbol BTCUSDT "
                 "--loop --interval 300 --threshold 0.10 "
+                "--live --exchange kraken "
                 "> logs/scanner.log 2>&1 &",
                 shell=True
             )
@@ -66,7 +71,8 @@ def monitor():
                 send_telegram_alert_sync("✅ Scanner restarted successfully.")
             else:
                 send_telegram_alert_sync(
-                    "❌ Failed to restart scanner. Manual intervention required."
+                    "❌ Failed to restart scanner. "
+                    "Manual intervention required."
                 )
         except (subprocess.SubprocessError, OSError) as e:
             send_telegram_alert_sync(f"❌ Error during restart attempt: {e}")
