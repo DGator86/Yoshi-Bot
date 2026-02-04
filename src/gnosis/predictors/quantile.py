@@ -66,8 +66,10 @@ class QuantilePredictor:
         self.config = models_config.get("predictor", {})
         self.quantiles = self.config.get("quantiles", [0.05, 0.50, 0.95])
         self.l2_reg = self.config.get("l2_reg", 1.0)
-        self.backend = self.config.get("backend", "ridge")
-        self.use_extended_features = self.config.get("extended_features", False)
+        # Default to gradient_boost for better nonlinear modeling
+        self.backend = self.config.get("backend", "gradient_boost")
+        # Enable extended features by default for better accuracy
+        self.use_extended_features = self.config.get("extended_features", True)
         self.normalize_features = self.config.get("normalize", True)
         self.models = {}
         self.scaler = None

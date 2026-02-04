@@ -431,14 +431,14 @@ def get_predictor_variables() -> List[Variable]:
         Variable(
             name="backend",
             path="models.predictor.backend",
-            current_value="ridge",
-            candidates=["ridge", "quantile", "gradient_boost"],
+            current_value="gradient_boost",  # Better default for nonlinear dynamics
+            candidates=["ridge", "quantile", "gradient_boost", "bregman_fw"],
             variable_type="categorical",
         ),
         Variable(
             name="extended_features",
             path="models.predictor.extended_features",
-            current_value=False,
+            current_value=True,  # Enable all physics features by default
             candidates=[True, False],
             variable_type="categorical",
         ),
@@ -448,6 +448,82 @@ def get_predictor_variables() -> List[Variable]:
             current_value=True,
             candidates=[True, False],
             variable_type="categorical",
+        ),
+        Variable(
+            name="predictor_type",
+            path="models.predictor.type",
+            current_value="unified",  # Use unified predictor for ensemble
+            candidates=["quantile", "unified", "bregman_fw"],
+            variable_type="categorical",
+        ),
+        Variable(
+            name="use_ensemble",
+            path="models.predictor.use_ensemble",
+            current_value=True,
+            candidates=[True, False],
+            variable_type="categorical",
+        ),
+        Variable(
+            name="regime_aware",
+            path="models.predictor.regime_aware",
+            current_value=True,
+            candidates=[True, False],
+            variable_type="categorical",
+        ),
+    ]
+
+
+def get_ensemble_variables() -> List[Variable]:
+    """Get tunable variables for ensemble prediction weights and parameters."""
+    return [
+        Variable(
+            name="ensemble_weight_gb",
+            path="models.ensemble.weight_gradient_boost",
+            current_value=0.4,
+            candidates=[0.2, 0.3, 0.4, 0.5, 0.6],
+            variable_type="continuous",
+        ),
+        Variable(
+            name="ensemble_weight_rf",
+            path="models.ensemble.weight_random_forest",
+            current_value=0.3,
+            candidates=[0.1, 0.2, 0.3, 0.4],
+            variable_type="continuous",
+        ),
+        Variable(
+            name="ensemble_weight_ridge",
+            path="models.ensemble.weight_ridge",
+            current_value=0.2,
+            candidates=[0.1, 0.2, 0.3],
+            variable_type="continuous",
+        ),
+        Variable(
+            name="ensemble_weight_physics",
+            path="models.ensemble.weight_physics",
+            current_value=0.1,
+            candidates=[0.0, 0.05, 0.1, 0.15, 0.2],
+            variable_type="continuous",
+        ),
+        Variable(
+            name="gb_max_depth",
+            path="models.ensemble.gb_max_depth",
+            current_value=4,
+            candidates=[2, 3, 4, 5, 6],
+            variable_type="discrete",
+        ),
+        Variable(
+            name="gb_n_estimators",
+            path="models.ensemble.gb_n_estimators",
+            current_value=100,
+            candidates=[50, 100, 150, 200],
+            variable_type="discrete",
+        ),
+        Variable(
+            name="gb_learning_rate",
+            path="models.ensemble.gb_learning_rate",
+            current_value=0.1,
+            candidates=[0.01, 0.05, 0.1, 0.15, 0.2],
+            variable_type="continuous",
         ),
     ]
 
@@ -661,6 +737,7 @@ def get_all_variables() -> List[Variable]:
     """Get all tunable variables."""
     return (
         get_predictor_variables() +
+        get_ensemble_variables() +
         get_domain_variables() +
         get_regime_variables() +
         get_particle_variables() +
