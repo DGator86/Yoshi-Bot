@@ -25,6 +25,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from gnosis.domains import DomainAggregator, compute_features
 from gnosis.particle import QuantumPriceEngine, compute_quantum_features
+from gnosis.particle.collector import CCXTDataCollector, CollectorConfig
+
+
+def normalize_symbol_for_ccxt(symbol: str) -> str:
+    """Normalize symbols like BTCUSDT to BTC/USDT for CCXT."""
+    if "/" in symbol:
+        return symbol
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}/USDT"
+    return symbol
 
 
 def main():
@@ -32,6 +42,10 @@ def main():
     parser.add_argument(
         "--data", type=str, default="data/parquet/prints.parquet",
         help="Path to prints parquet file"
+    )
+    parser.add_argument(
+        "--symbol", type=str, default="BTCUSDT",
+        help="Trading symbol to label output (default: BTCUSDT)"
     )
     parser.add_argument(
         "--horizon", type=int, default=60,
@@ -48,6 +62,10 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=None,
         help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--orderbook", action="store_true",
+        help="Fetch live order book snapshot for bid/ask analysis"
     )
     args = parser.parse_args()
 
@@ -113,6 +131,24 @@ def main():
         (recent_prices.max(), 200),
     ]
 
+    # Optional order book snapshot for bid/ask analysis
+    best_bid = None
+    best_ask = None
+    spread = None
+    spread_bps = None
+    if args.orderbook:
+        collector = CCXTDataCollector(CollectorConfig())
+        orderbook_symbol = normalize_symbol_for_ccxt(args.symbol)
+        orderbook = collector.fetch_orderbook(orderbook_symbol, limit=20)
+        bids = orderbook.get("bids", [])
+        asks = orderbook.get("asks", [])
+        if bids and asks:
+            best_bid = bids[0][0]
+            best_ask = asks[0][0]
+            spread = best_ask - best_bid
+            mid = (best_bid + best_ask) / 2
+            spread_bps = spread / mid * 10000
+
     # Run prediction
     print(f"\nRunning prediction for {args.horizon} minute horizon...")
     result = engine.predict(
@@ -134,12 +170,41 @@ def main():
     # Additional analysis
     print("\nPREDICTION SUMMARY:")
     print("-" * 40)
+    print(f"  Symbol:   {args.symbol}")
     print(f"  Current:  ${result.current_price:,.2f}")
     print(f"  Predict:  ${result.point_estimate:,.2f}")
     print(f"  Change:   {result.expected_return_pct:+.2f}%")
     print()
     print(f"  90% CI:   ${result.confidence_intervals['90%'][0]:,.2f} - "
           f"${result.confidence_intervals['90%'][1]:,.2f}")
+    print()
+
+    print("ORDER BOOK (BID/ASK):")
+    print("-" * 40)
+    if best_bid is not None and best_ask is not None and spread is not None:
+        print(f"  Best Bid: ${best_bid:,.2f}")
+        print(f"  Best Ask: ${best_ask:,.2f}")
+        print(f"  Spread:   ${spread:,.2f} ({spread_bps:.2f} bps)")
+    else:
+        print("  No live order book snapshot (run with --orderbook for bid/ask)")
+    print()
+
+    print("SUPPORT / RESISTANCE:")
+    print("-" * 40)
+    support_prices = [level[0] for level in support_levels]
+    resistance_prices = [level[0] for level in resistance_levels]
+    print(f"  Support:    ${min(support_prices):,.2f} - ${max(support_prices):,.2f}")
+    print(f"  Resistance: ${min(resistance_prices):,.2f} - ${max(resistance_prices):,.2f}")
+    print()
+
+    last_row = features_df.iloc[-1]
+    print("PARTICLE ENGINE INDICATORS:")
+    print("-" * 40)
+    print(f"  Momentum (weighted): {last_row['momentum_weighted']:+.4%}")
+    print(f"  VWAP displacement:   {last_row['vwap_displacement']:+.4%}")
+    print(f"  Volatility ratio:    {last_row['vol_ratio']:.2f}")
+    print(f"  Jump intensity:      {last_row['jump_intensity']:.2%}")
+    print(f"  Regime stability:    {last_row['regime_stability']:.2%}")
     print()
 
     # Accuracy evaluation against historical data
