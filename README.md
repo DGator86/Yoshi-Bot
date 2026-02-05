@@ -34,6 +34,13 @@ python scripts/fetch_coingecko_data.py --symbols BTCUSDT ETHUSDT --days 30
 
 Supported symbols: BTCUSDT, ETHUSDT, SOLUSDT
 
+## Crypto Price-as-a-Particle (Strengthened Approach)
+
+For the crypto-first, physics-consistent interpretation of VWAP, EMA, Bollinger Bands,
+RSI, Ichimoku, funding, OI, liquidations, and CVD, see:
+
+- [docs/crypto-strengthened-approach.md](docs/crypto-strengthened-approach.md)
+
 ## Required Outputs (per run)
 - data/manifests/data_manifest.json
 - reports/latest/report.json
