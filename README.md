@@ -58,6 +58,31 @@ PASS requires:
 - improved sharpness vs baseline at similar coverage
 - deterministic outputs given seed/config
 
+## Prediction Test Battery
+The prediction test battery lives in `gnosis.prediction_test_battery` and can be run
+against platform artifacts or synthetic data. It evaluates robustness across suites
+0, A, B, C, D, E, F, and G and produces PASS/WARN/FAIL scorecards plus JSON/Markdown
+reports.
+
+### Quickstart (Synthetic)
+```bash
+python -m gnosis.prediction_test_battery.cli run --synthetic --suite full
+```
+
+### Quickstart (Artifact + candles)
+```bash
+python -m gnosis.prediction_test_battery.cli run \\
+  --artifact-path path/to/predictions.csv \\
+  --candles-path path/to/candles.csv \\
+  --features-path path/to/features.csv \\
+  --suite full
+```
+
+### Adding a new test
+1. Create a new `BaseTest` in `gnosis/prediction_test_battery/suites.py`.
+2. Add it to the appropriate suite in `SUITE_TESTS`.
+3. Ensure it returns a `TestResult` and include recommended actions for WARN/FAIL.
+
 ## Moltbot AI + Service Setup
 To connect an AI planner and your external services (Slack, webhooks, etc.), use
 the Moltbot orchestration layer.
