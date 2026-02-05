@@ -450,6 +450,7 @@ class QuantumPriceEngine:
         self,
         df: pd.DataFrame,
         horizon_minutes: int = 60,
+        align_to_hour_end: bool = False,
         funding_rate: float = 0.0,
         bid_volume: float = 0.0,
         ask_volume: float = 0.0,
@@ -463,6 +464,7 @@ class QuantumPriceEngine:
         Args:
             df: DataFrame with OHLCV data
             horizon_minutes: Prediction horizon in minutes
+            align_to_hour_end: Cap horizon to minutes remaining in the current hour
             funding_rate: Current funding rate (decimal, e.g., 0.0001 = 0.01%)
             bid_volume: Total bid volume in order book
             ask_volume: Total ask volume in order book
@@ -474,6 +476,11 @@ class QuantumPriceEngine:
         Returns:
             PredictionResult with point estimate and confidence intervals
         """
+        horizon_minutes = self.resolve_horizon_minutes(
+            df,
+            horizon_minutes=horizon_minutes,
+            align_to_hour_end=align_to_hour_end,
+        )
         current_price = float(df["close"].iloc[-1])
 
         # Detect regime
@@ -576,6 +583,33 @@ class QuantumPriceEngine:
             forces=forces,
             simulation_stats=simulation_stats,
         )
+
+    def resolve_horizon_minutes(
+        self,
+        df: pd.DataFrame,
+        horizon_minutes: int,
+        align_to_hour_end: bool = False,
+    ) -> int:
+        """Resolve the effective horizon in minutes."""
+        minutes = int(horizon_minutes)
+        if align_to_hour_end:
+            timestamp = (
+                df["timestamp_end"].iloc[-1]
+                if "timestamp_end" in df.columns and len(df) > 0
+                else pd.Timestamp.utcnow()
+            )
+            minutes_to_hour_end = self._minutes_to_hour_end(pd.Timestamp(timestamp))
+            minutes = min(minutes, minutes_to_hour_end)
+        return max(1, minutes)
+
+    @staticmethod
+    def _minutes_to_hour_end(timestamp: pd.Timestamp) -> int:
+        """Minutes until the next hour boundary (minimum 1)."""
+        next_hour = (timestamp + pd.Timedelta(hours=1)).replace(
+            minute=0, second=0, microsecond=0
+        )
+        remaining_seconds = (next_hour - timestamp).total_seconds()
+        return max(1, int(np.ceil(remaining_seconds / 60)))
 
     def generate_report(self, result: PredictionResult, horizon_minutes: int = 60) -> str:
         """Generate human-readable prediction report."""

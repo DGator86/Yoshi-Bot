@@ -52,6 +52,12 @@ def main():
         help="Prediction horizon in minutes (default: 60)"
     )
     parser.add_argument(
+        "--align-hour-end",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Align horizon to the end of the current hour (default: True)",
+    )
+    parser.add_argument(
         "--simulations", type=int, default=10000,
         help="Number of Monte Carlo simulations (default: 10000)"
     )
@@ -150,10 +156,16 @@ def main():
             spread_bps = spread / mid * 10000
 
     # Run prediction
-    print(f"\nRunning prediction for {args.horizon} minute horizon...")
+    resolved_horizon = engine.resolve_horizon_minutes(
+        features_df,
+        horizon_minutes=args.horizon,
+        align_to_hour_end=args.align_hour_end,
+    )
+    print(f"\nRunning prediction for {resolved_horizon} minute horizon...")
     result = engine.predict(
         df=features_df,
-        horizon_minutes=args.horizon,
+        horizon_minutes=resolved_horizon,
+        align_to_hour_end=False,
         funding_rate=0.0001,  # Placeholder - would come from exchange API
         bid_volume=bid_volume,
         ask_volume=ask_volume,
@@ -163,7 +175,7 @@ def main():
     )
 
     # Generate and print report
-    report = engine.generate_report(result, args.horizon)
+    report = engine.generate_report(result, resolved_horizon)
     print()
     print(report)
 
