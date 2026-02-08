@@ -120,6 +120,65 @@ class OpenAIChatClient(AIClient):
         return json.loads(content)
 
 
+class OpenRouterClient(AIClient):
+    """OpenRouter client for accessing various models including Claude (ClawdBot)."""
+
+    def __init__(self, config: AIProviderConfig):
+        self.config = config
+
+    def _get_api_key(self) -> str:
+        api_key = os.getenv(self.config.api_key_env)
+        if not api_key:
+            raise RuntimeError(
+                f"Missing API key in env var {self.config.api_key_env}."
+            )
+        return api_key
+
+    def generate_plan(self, prompt: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        api_key = self._get_api_key()
+        payload = {
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": self.config.system_prompt},
+                {
+                    "role": "user",
+                    "content": f"{prompt}\n\nContext: {json.dumps(context)}",
+                },
+            ],
+            "temperature": 0.1,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            self.config.endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                # OpenRouter best practice
+                "HTTP-Referer": "https://github.com/DGator86/Yoshi-Bot",
+                "X-Title": "Yoshi-Bot",
+            },
+            method="POST",
+        )
+        with request.urlopen(req, timeout=self.config.timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        if "choices" not in data:
+            raise RuntimeError(f"OpenRouter Error: {json.dumps(data)}")
+
+        content = data["choices"][0]["message"]["content"]
+        # Try to parse JSON from the response
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # If the model returned text around the JSON, try a basic extract
+            if "{" in content and "}" in content:
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                return json.loads(content[start:end])
+            raise
+
+
 class StubAIClient(AIClient):
     """Fallback AI client for local testing without external calls."""
 
@@ -174,8 +233,11 @@ class MoltbotOrchestrator:
         self.services = list(services) if services is not None else self._load_services()
 
     def _default_ai_client(self) -> AIClient:
-        if self.config.ai.provider.lower() == "openai":
+        provider = self.config.ai.provider.lower()
+        if provider == "openai":
             return OpenAIChatClient(self.config.ai)
+        if provider in ("openrouter", "clawdbot"):
+            return OpenRouterClient(self.config.ai)
         return StubAIClient()
 
     def _load_services(self) -> List[ServiceAdapter]:

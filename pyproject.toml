@@ -9,6 +9,11 @@ dependencies = [
     "scikit-learn",
     "matplotlib",
     "typer",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "python-dotenv",
+    "requests",
 ]
 
 [tool.pytest.ini_options]

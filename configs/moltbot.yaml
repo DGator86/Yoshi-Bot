@@ -1,8 +1,8 @@
 ai:
-  provider: openai
-  model: gpt-4o-mini
-  api_key_env: OPENAI_API_KEY
-  endpoint: https://api.openai.com/v1/chat/completions
+  provider: openrouter
+  model: anthropic/claude-3.5-sonnet
+  api_key_env: OPENROUTER_API_KEY
+  endpoint: https://openrouter.ai/api/v1/chat/completions
   timeout_seconds: 30
   system_prompt: >
     You are Moltbot, a trading assistant. Use the forecast data and
