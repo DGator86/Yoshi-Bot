@@ -17,3 +17,6 @@ reports/
 # Environment variables
 .env
 _moltbot_probe.txt
+
+# Mypy cache
+.mypy_cache/
