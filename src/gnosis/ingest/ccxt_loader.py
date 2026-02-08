@@ -390,6 +390,8 @@ def fetch_live_prints(
     api_key: Optional[str] = None,
     secret: Optional[str] = None,
     fallback_to_ohlcv: bool = True,
+    force_ohlcv: bool = False,
+    timeframe: str = '1m',
 ) -> pd.DataFrame:
     """Convenience function to fetch trade prints for multiple symbols.
 
@@ -429,26 +431,34 @@ def fetch_live_prints(
         else:
             ccxt_symbol = symbol
 
-        print(f"Fetching trades for {ccxt_symbol} from {exchange}...")
-
-        try:
-            trades_df = loader.fetch_trades(ccxt_symbol, days=days)
-            if not trades_df.empty:
-                all_prints.append(trades_df)
-                print(f"  Fetched {len(trades_df)} trades")
-                continue
-        except Exception as e:
-            print(f"  Warning: Could not fetch trades for {ccxt_symbol}: {e}")
-
-        # Fallback: Generate prints from OHLCV data
-        if fallback_to_ohlcv:
-            print(f"  Falling back to OHLCV-based print generation...")
+        if not force_ohlcv:
+            print(f"Fetching trades for {ccxt_symbol} from {exchange}...")
             try:
-                ohlcv_df = loader.fetch_ohlcv(ccxt_symbol, timeframe='1m', days=days)
+                trades_df = loader.fetch_trades(ccxt_symbol, days=days)
+                if not trades_df.empty:
+                    all_prints.append(trades_df)
+                    print(f"  Fetched {len(trades_df)} trades")
+                    continue
+            except Exception as e:
+                print(f"  Warning: Could not fetch trades for {ccxt_symbol}: {e}")
+
+        # Fallback or Forced: Generate prints from OHLCV data
+        if fallback_to_ohlcv or force_ohlcv:
+            if force_ohlcv:
+                print("  Forcing OHLCV-based print generation for history...")
+            else:
+                print("  Falling back to OHLCV-based print generation...")
+            try:
+                ohlcv_df = loader.fetch_ohlcv(
+                    ccxt_symbol, timeframe=timeframe, days=days
+                )
                 if not ohlcv_df.empty:
                     prints_from_ohlcv = _generate_prints_from_ohlcv(ohlcv_df)
                     all_prints.append(prints_from_ohlcv)
-                    print(f"  Generated {len(prints_from_ohlcv)} synthetic prints from {len(ohlcv_df)} OHLCV bars")
+                    print(
+                        f"  Generated {len(prints_from_ohlcv)} synthetic "
+                        f"prints from {len(ohlcv_df)} OHLCV bars"
+                    )
             except Exception as e2:
                 print(f"  Warning: Could not fetch OHLCV for {ccxt_symbol}: {e2}")
 
@@ -458,7 +468,11 @@ def fetch_live_prints(
     return pd.concat(all_prints, ignore_index=True).sort_values('timestamp')
 
 
-def _generate_prints_from_ohlcv(ohlcv_df: pd.DataFrame, trades_per_bar: int = 50) -> pd.DataFrame:
+def _generate_prints_from_ohlcv(
+    ohlcv_df: pd.DataFrame,
+    trades_per_bar: int = 200,
+    seed: int = 1337
+) -> pd.DataFrame:
     """Generate synthetic trade prints from OHLCV data.
 
     Creates realistic trade data by distributing trades within each OHLCV bar

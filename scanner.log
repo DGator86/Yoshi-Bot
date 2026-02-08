@@ -1,0 +1,18 @@
+2026-02-08 14:11:10,873 [INFO] Found 15 opportunities!
+2026-02-08 14:11:10,876 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,893 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,908 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,924 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,939 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,942 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,955 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,971 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,973 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,987 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,989 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,991 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,993 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:10,995 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:11,018 [INFO] Bridged BUY_NO for BTCUSDT to Trading Core
+2026-02-08 14:11:11,018 [INFO] Sending Telegram alert...
+2026-02-08 14:11:11,035 [ERROR] Failed to send Telegram message: Cannot connect to host api.telegram.org:443 ssl:default [Could not contact DNS servers]

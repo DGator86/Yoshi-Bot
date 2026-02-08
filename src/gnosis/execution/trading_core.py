@@ -1,3 +1,8 @@
+"""FastAPI Core for Yoshi-Bot Trading execution and state management.
+
+This module provides the API endpoints for receiving trade proposals from
+scanners, managing positions, and coordinating with ClawdBot for execution.
+"""
 import logging
 import uuid
 from datetime import datetime
@@ -15,6 +20,8 @@ app = FastAPI(title="Yoshi-Bot Trading Core")
 
 
 class TradeProposal(BaseModel):
+    """Model representing a single trade proposal from a scanner."""
+
     proposal_id: str = ""
     symbol: str
     action: str  # BUY_YES, BUY_NO
@@ -26,12 +33,16 @@ class TradeProposal(BaseModel):
 
 
 class ActionResponse(BaseModel):
+    """Standardized response for API actions."""
+
     success: bool
     message: str
     data: Optional[Dict[str, Any]] = None
 
 
 class StatusResponse(BaseModel):
+    """System status information response."""
+
     status: str
     active: bool
     timestamp: datetime
@@ -42,12 +53,15 @@ class StatusResponse(BaseModel):
 
 
 class TradingState:
-    def __init__(self):
-        self.is_active = True
+    """In-memory store for trading system status, proposals and positions."""
+
+    def __init__(self) -> None:
+        """Initialize the trading state with empty containers."""
+        self.is_active: bool = True
         self.proposals: Dict[str, Dict] = {}
         self.positions: List[Dict] = []
         self.orders: List[Dict] = []
-        self.start_time = datetime.now()
+        self.start_time: datetime = datetime.now()
 
 
 state = TradingState()
@@ -57,7 +71,8 @@ state = TradingState()
 
 
 @app.get("/status", response_model=StatusResponse)
-async def get_status():
+async def get_status() -> Dict[str, Any]:
+    """Return the current health and status of the trading bot."""
     return {
         "status": "running" if state.is_active else "paused",
         "active": state.is_active,
@@ -67,17 +82,26 @@ async def get_status():
 
 
 @app.get("/positions")
-async def get_positions():
+async def get_positions() -> List[Dict]:
+    """Retrieve all currently active positions."""
     return state.positions
 
 
 @app.get("/orders")
-async def get_orders():
+async def get_orders() -> List[Dict]:
+    """Retrieve the history of all executed orders."""
     return state.orders
 
 
+@app.get("/proposals")
+async def get_proposals() -> Dict[str, Dict]:
+    """Retrieve the queue of all received trade proposals."""
+    return state.proposals
+
+
 @app.post("/propose", response_model=ActionResponse)
-async def propose_trade(proposal: TradeProposal):
+async def propose_trade(proposal: TradeProposal) -> Dict[str, Any]:
+    """Receive a new trade proposal from the scanner."""
     if not state.is_active:
         return {"success": False, "message": "Trading Core is paused."}
 
@@ -85,7 +109,7 @@ async def propose_trade(proposal: TradeProposal):
     proposal.proposal_id = prop_id
     state.proposals[prop_id] = proposal.dict()
 
-    logger.info(f"Received proposal {prop_id} for {proposal.symbol}")
+    logger.info("Received proposal %s for %s", prop_id, proposal.symbol)
     return {
         "success": True,
         "message": f"Proposal {prop_id} received.",
@@ -94,14 +118,14 @@ async def propose_trade(proposal: TradeProposal):
 
 
 @app.post("/approve/{proposal_id}", response_model=ActionResponse)
-async def approve_trade(proposal_id: str):
+async def approve_trade(proposal_id: str) -> Dict[str, Any]:
+    """Approve a proposal and simulate its execution."""
     if proposal_id not in state.proposals:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
     proposal = state.proposals[proposal_id]
 
-    # Here we would normally trigger the actual exchange order
-    # For now, we simulate success
+    # Simulation: Normally this triggers an exchange order
     order = {
         "order_id": str(uuid.uuid4())[:8],
         "symbol": proposal["symbol"],
@@ -112,7 +136,7 @@ async def approve_trade(proposal_id: str):
     state.orders.append(order)
     state.positions.append(order)
 
-    msg = f"Approved proposal {proposal_id}, executed order {order['order_id']}"
+    msg = f"Approved {proposal_id}, executed order {order['order_id']}"
     logger.info(msg)
     return {
         "success": True,
@@ -121,7 +145,8 @@ async def approve_trade(proposal_id: str):
 
 
 @app.post("/kill-switch", response_model=ActionResponse)
-async def kill_switch():
+async def kill_switch() -> Dict[str, Any]:
+    """Halt all trading and activate safety mode."""
     state.is_active = False
     # Logic to cancel all orders and flatten positions would go here
     logger.warning("KILL SWITCH ACTIVATED")
@@ -132,19 +157,22 @@ async def kill_switch():
 
 
 @app.post("/pause", response_model=ActionResponse)
-async def pause_trading():
+async def pause_trading() -> Dict[str, Any]:
+    """Temporarily pause new trade reception."""
     state.is_active = False
     return {"success": True, "message": "Trading paused."}
 
 
 @app.post("/resume", response_model=ActionResponse)
-async def resume_trading():
+async def resume_trading() -> Dict[str, Any]:
+    """Resume reception of trade proposals."""
     state.is_active = True
     return {"success": True, "message": "Trading resumed."}
 
 
 @app.post("/flatten", response_model=ActionResponse)
-async def flatten_positions():
-    # Logic to close all positions
+async def flatten_positions() -> Dict[str, Any]:
+    """Liquidate all open positions (Simulated)."""
+    # Logic to close all positions would go here
     state.positions = []
     return {"success": True, "message": "All positions flattened."}

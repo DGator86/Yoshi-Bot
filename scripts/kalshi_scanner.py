@@ -7,26 +7,41 @@ prediction market opportunities on Kalshi across multi-scale regimes.
 Supports continuous background running and Telegram alerts.
 """
 import argparse
+import logging
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+import requests
+from dotenv import load_dotenv
+
 # Add project root to path BEFORE importing local modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pandas as pd  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
-from src.gnosis.quantum import PriceTimeManifold  # noqa: E402
-import src.gnosis.utils.notifications as notify  # noqa: E402
-from src.gnosis.utils.kalshi_client import KalshiClient  # noqa: E402
+from scripts.evaluate_manifold import prints_to_ohlcv  # noqa: E402
 from src.gnosis.ingest.ccxt_loader import fetch_live_ohlcv  # noqa: E402
 from src.gnosis.ingest.coingecko import fetch_coingecko_prints  # noqa: E402
-from scripts.evaluate_manifold import prints_to_ohlcv  # noqa: E402
+from src.gnosis.quantum import PriceTimeManifold  # noqa: E402
+from src.gnosis.utils.kalshi_client import KalshiClient  # noqa: E402
+import src.gnosis.utils.notifications as notify  # noqa: E402
 
 # Load environment variables
 load_dotenv()
 kalshi = KalshiClient()
+
+# Set up logging
+log_file = Path("scanner.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("kalshi_scanner")
 
 
 def format_kalshi_report(opportunities):
@@ -35,7 +50,7 @@ def format_kalshi_report(opportunities):
         return "No significant mispricings detected in current regime."
 
     lines = ["=" * 40,
-             "🚀 YOSHI KALSHI ALERT",
+             "YOSHI KALSHI ALERT",
              "=" * 40, ""]
 
     for opp in opportunities:
@@ -49,7 +64,7 @@ def format_kalshi_report(opportunities):
         lines.append(f"Market Prob: {opp['market_prob']:.1%}")
         lines.append(f"Model Prob: {opp['model_prob']:.1%}")
         edge = opp['model_prob'] - opp['market_prob']
-        lines.append(f"✅ *EDGE: {edge:+.1%}*")
+        lines.append(f"EDGE: {edge:+.1%}")
         action = ("BUY YES" if edge > 0.05 else "BUY NO"
                   if edge < -0.05 else "NEUTRAL")
         lines.append(f"ACTION: `{action}`")
@@ -222,6 +237,8 @@ def main():
                         help="Fetch live data from APIs (default: True)")
     parser.add_argument("--exchange", type=str, default="kraken",
                         help="CCXT exchange ID (default: kraken)")
+    parser.add_argument("--bridge", action="store_true",
+                        help="Send opportunities to Trading Core API")
     args = parser.parse_args()
 
     data_path = "data/large_history/prints.parquet"
@@ -249,24 +266,24 @@ def main():
                         days=2
                     )
                     if not live_data.empty:
-                        print(f"✅ Successfully ingested data from {src}.")
+                        print(f"Successfully ingested data from {src}.")
                         break
-                except Exception as e:
-                    print(f"⚠️ {src} ingestion failed: {e}")
+                except Exception as e:  # pylint: disable=broad-except
+                    print(f"Ingestion failed for {src}: {e}")
 
             # Fallback to CoinGecko if CCXT fails
             if live_data is None or live_data.empty:
-                print("🔄 Falling back to CoinGecko...")
+                print("Falling back to CoinGecko...")
                 try:
                     cg_data = fetch_coingecko_prints([args.symbol], days=2)
                     if not cg_data.empty:
                         live_data = prints_to_ohlcv(cg_data, bar_minutes=1)
-                        print("✅ Successfully ingested data from CoinGecko.")
-                except Exception as e:
-                    print(f"❌ CoinGecko fallback failed: {e}")
+                        print("Successfully ingested data from CoinGecko.")
+                except Exception as e:  # pylint: disable=broad-except
+                    print(f"CoinGecko fallback failed: {e}")
 
         if live_data is None:
-            print("⚠️ No live data available. Using local cache.")
+            print("No live data available. Using local cache.")
 
         opps = run_scan(
             args.symbol,
@@ -275,18 +292,54 @@ def main():
             live_ohlcv=live_data
         )
         if opps:
-            print(f"Found {len(opps)} opportunities!")
+            logger.info("Found %d opportunities!", len(opps))
             report = format_kalshi_report(opps)
+
+            # Bridge to Trading Core
+            if args.bridge:
+                for opp in opps:
+                    edge = opp['model_prob'] - opp['market_prob']
+                    action = ("BUY_YES" if edge > 0.05 else "BUY_NO"
+                              if edge < -0.05 else "NEUTRAL")
+
+                    if action != "NEUTRAL":
+                        payload = {
+                            "symbol": opp['symbol'],
+                            "action": action,
+                            "strike": float(opp['strike']),
+                            "market_prob": float(opp['market_prob']),
+                            "model_prob": float(opp['model_prob']),
+                            "edge": float(edge)
+                        }
+                        try:
+                            resp = requests.post(
+                                "http://127.0.0.1:8000/propose",
+                                json=payload,
+                                timeout=5
+                            )
+                            if resp.status_code == 200:
+                                logger.info(
+                                    "Bridged %s for %s to Trading Core",
+                                    action, opp['symbol']
+                                )
+                            else:
+                                logger.error(
+                                    "Bridge failed: %d",
+                                    resp.status_code
+                                )
+                        except Exception as e:  # pylint: disable=broad-except
+                            logger.error("Bridge connection error: %s", e)
+
             # Check cooldown
             if time.time() - last_alert_time > cooldown:
-                print("Sending Telegram alert...")
+                logger.info("Sending Telegram alert...")
                 notify.send_telegram_alert_sync(report)
                 last_alert_time = time.time()
             else:
-                print("Alert found but currently in cooldown.")
+                logger.info("Alert found but currently in cooldown.")
             print(report)
         else:
-            print("No significant edge found.")
+            logger.info("No significant edge found.")
 
         if not args.loop:
             break

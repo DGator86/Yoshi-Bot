@@ -1,3 +1,8 @@
+"""Script to start the Yoshi-Bot Trading Core API server.
+
+This API provides the interface for ClawdBot to query system status,
+propose trades, and manage positions.
+"""
 import argparse
 import sys
 from pathlib import Path
@@ -9,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def main():
+    """Run the FastAPI application using uvicorn."""
     parser = argparse.ArgumentParser(
         description="Start Yoshi-Bot Trading Core API"
     )

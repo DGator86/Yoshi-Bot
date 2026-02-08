@@ -158,6 +158,7 @@ def load_or_create_prints(
         exchange = live_config.get("exchange", "binance")
         days = live_config.get("days", 365)  # Default to 1 year
         api_key = live_config.get("api_key")
+        timeframe = live_config.get("timeframe", "1m")
         
         print(f"Fetching 1m OHLCV from {exchange} for {symbols}...")
         # We use fetch_live_prints which has built-in OHLCV fallback/conversion
@@ -166,7 +167,9 @@ def load_or_create_prints(
             exchange=exchange,
             days=days,
             api_key=api_key,
-            fallback_to_ohlcv=True
+            fallback_to_ohlcv=True,
+            force_ohlcv=True,
+            timeframe=timeframe
         )
         df.to_parquet(prints_path, index=False)
         print(f"Cached {len(df)} prints converted from OHLCV to {prints_path}")
